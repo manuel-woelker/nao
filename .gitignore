@@ -1,0 +1,8 @@
+/target
+/.idea
+/ballpit
+/verification/output/rajac
+perf.data*
+flamegraph.svg
+/verification/sources/verify/simple/classes/
+/verification/sources_invalid/classes
