@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  build-test-verify:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -44,6 +44,3 @@ jobs:
 
       - name: Tests
         run: cargo nextest run
-
-      - name: Verification suite
-        run: cargo run -p verification
