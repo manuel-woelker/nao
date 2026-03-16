@@ -11,5 +11,6 @@ tracing-error = "0.2.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 parking_lot = "0.12.5"
 serde = "1.0.228"
+kdl = "6.5.0"
 
 expect-test = "1.5.1"

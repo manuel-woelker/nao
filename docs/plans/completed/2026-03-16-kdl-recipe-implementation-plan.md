@@ -1,18 +1,21 @@
 # What problem does this plan solve?
 
-`nao` needs a concrete recipe file format so users can define tasks, dependencies, execution modes, environment variables, and artifacts in a structured way. [`docs/RECIPES.md`](../RECIPES.md) establishes KDL as the intended format, but the implementation is still a placeholder.
+`nao` needs a concrete recipe file format so users can define tasks, dependencies, execution modes, environment variables, and artifacts in a structured way. [`docs/RECIPES.md`](../../RECIPES.md) establishes KDL as the intended format, and this plan covered the first implementation slice of that format.
 
 This plan describes how to turn that format direction into a working parser and typed recipe model in Rust.
 
 # What is the current status?
 
-The repository currently has:
+This plan is complete.
 
-- Documentation describing the intended KDL-based recipe format
-- A placeholder `nao-recipe` crate with no real parsing or validation logic
-- A CLI crate that does not yet load or validate recipe files
+The repository now has:
 
-The main gap is that the documented format does not yet exist as executable code.
+- a `nao-recipe` crate with typed recipe domain types
+- KDL parsing and semantic validation for the initial documented subset
+- colocated parser tests, including snapshot-style error assertions
+- a minimal CLI code path that loads and validates a recipe file
+
+Follow-up work can extend the schema, improve source-location diagnostics, and add broader execution integration.
 
 # What implementation approach should be used?
 
@@ -47,7 +50,7 @@ The error model should distinguish between:
 
 # What subset should be implemented first?
 
-The first implementation should support a constrained subset of the documented format:
+The implemented subset supports:
 
 - One top-level recipe
 - `task` nodes with unique names
@@ -57,7 +60,7 @@ The first implementation should support a constrained subset of the documented f
 - Optional `env` entries
 - Optional `artifact` entries with a name and path
 
-The first implementation should defer:
+The implemented slice still defers:
 
 - Advanced reproducibility settings
 - Per-task failure policy
@@ -76,7 +79,7 @@ The conversion and validation layer should check:
 - malformed artifact declarations
 - malformed environment declarations
 
-Validation errors should preserve source locations where possible so the CLI can produce precise diagnostics.
+Validation currently produces task-aware diagnostics and integrates with `nao-base` error rendering. Richer source-location reporting inside KDL files remains follow-up work.
 
 # How should the work be ordered?
 
@@ -89,27 +92,27 @@ The recommended implementation order is:
 5. Add tests for success cases and invalid configurations.
 6. Add a minimal CLI path that loads and validates a recipe file.
 7. Extend the parser to cover `env`, `artifact`, and container arguments from the documented example.
-8. Reconcile [`docs/RECIPES.md`](../RECIPES.md) with the implemented schema if the implementation uncovers better naming or structure.
+8. Reconcile [`docs/RECIPES.md`](../../RECIPES.md) with the implemented schema if the implementation uncovers better naming or structure.
 
 # What concrete work items should be tracked?
 
-- [ ] Add a KDL parsing dependency to `crates/recipe/Cargo.toml`.
-- [ ] Replace the placeholder `crates/recipe/src/lib.rs` with module declarations only.
-- [ ] Add small focused domain model files in `crates/recipe/src/`.
-- [ ] Implement a public recipe parsing entrypoint in `nao-recipe`.
-- [ ] Parse task names and `depends-on` entries.
-- [ ] Parse `run` nodes for `shell`, `script`, and `container`.
-- [ ] Parse optional `env` entries.
-- [ ] Parse optional `artifact` entries.
-- [ ] Detect duplicate task names.
-- [ ] Detect unknown dependency references.
-- [ ] Detect invalid or conflicting execution definitions.
-- [ ] Integrate recipe errors with `nao-base` error reporting.
-- [ ] Add colocated tests for successful parsing.
-- [ ] Add colocated tests for invalid recipe diagnostics.
-- [ ] Add snapshot tests where rendered diagnostics are part of the contract.
-- [ ] Add a minimal CLI code path to load and validate a recipe file.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Add a KDL parsing dependency to `crates/recipe/Cargo.toml`.
+- [x] Replace the placeholder `crates/recipe/src/lib.rs` with module declarations only.
+- [x] Add small focused domain model files in `crates/recipe/src/`.
+- [x] Implement a public recipe parsing entrypoint in `nao-recipe`.
+- [x] Parse task names and `depends-on` entries.
+- [x] Parse `run` nodes for `shell`, `script`, and `container`.
+- [x] Parse optional `env` entries.
+- [x] Parse optional `artifact` entries.
+- [x] Detect duplicate task names.
+- [x] Detect unknown dependency references.
+- [x] Detect invalid or conflicting execution definitions.
+- [x] Integrate recipe errors with `nao-base` error reporting.
+- [x] Add colocated tests for successful parsing.
+- [x] Add colocated tests for invalid recipe diagnostics.
+- [x] Add snapshot tests where rendered diagnostics are part of the contract.
+- [x] Add a minimal CLI code path to load and validate a recipe file.
+- [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
 
@@ -128,7 +131,7 @@ If the implementation introduces fixture-based verification or a broader verific
 This plan assumes:
 
 - the recipe format will remain KDL-based
-- the documented example in [`docs/RECIPES.md`](../RECIPES.md) is directionally correct, but not yet frozen as a final schema
+- the documented example in [`docs/RECIPES.md`](../../RECIPES.md) is directionally correct, but not yet frozen as a final schema
 - the first implementation should optimize for clarity and diagnostics rather than breadth
 - the CLI only needs a minimal load-and-validate integration in the first milestone
 

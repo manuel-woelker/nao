@@ -8,3 +8,10 @@ repository = "https://github.com/manuel-woelker/nao"
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+kdl = { workspace = true }
+nao-base = { path = "../base" }
+
+[dev-dependencies]
+expect-test = { workspace = true }

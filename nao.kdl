@@ -1,0 +1,26 @@
+recipe "default" {
+  task "build" {
+    run shell="cargo build --workspace --all-targets --all-features"
+  }
+
+  task "fmt" {
+    run shell="cargo fmt --all --check"
+  }
+
+  task "clippy" {
+    depends-on "build"
+    run shell="cargo clippy --workspace --all-targets --all-features -- -D warnings"
+  }
+
+  task "test" {
+    depends-on "build"
+    run shell="cargo nextest run --workspace --all-targets --all-features"
+  }
+
+  task "check-code" {
+    depends-on "fmt"
+    depends-on "clippy"
+    depends-on "test"
+    run script="./scripts/check-code.sh"
+  }
+}

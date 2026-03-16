@@ -7,3 +7,5 @@ license = "MIT"
 repository = "https://github.com/manuel-woelker/nao"
 
 [dependencies]
+nao-base = { path = "../base" }
+nao-recipe = { path = "../recipe" }
