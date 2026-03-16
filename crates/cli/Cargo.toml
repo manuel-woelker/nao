@@ -8,5 +8,6 @@ repository = "https://github.com/manuel-woelker/nao"
 
 [dependencies]
 nao-base = { path = "../base" }
+nao-pal = { path = "../pal" }
 nao-recipe = { path = "../recipe" }
 xflags = { workspace = true }

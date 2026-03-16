@@ -14,6 +14,8 @@ Note: All developer documentation should be written in English.
 
 - Implementation Language: Rust
 - Use `nao_base::SharedString` instead of plain `String` for string fields in structs
+- Use `nao_pal::pal::Pal` for platform interaction such as filesystem access, clocks, and file watching
+- Prefer `nao_pal::pal_mock::PalMock` in tests when code depends on platform behavior
 
 ## Documentation Strategy
 

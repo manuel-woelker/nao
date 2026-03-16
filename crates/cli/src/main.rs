@@ -1,7 +1,9 @@
 use nao_base::cli::try_main_with_headline;
 use nao_base::err;
+use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
-use nao_recipe::{RunSpec, Task, load_recipe};
+use nao_pal::pal_real::PalReal;
+use nao_recipe::{RunSpec, Task, load_recipe_with_pal};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -22,7 +24,8 @@ fn run() -> NaoResult<()> {
     let recipe_path = flags
         .recipe_file
         .unwrap_or_else(|| PathBuf::from("nao.kdl"));
-    let recipe = load_recipe(&recipe_path)?;
+    let pal = PalReal::new_handle();
+    let recipe = load_recipe_with_pal(&*pal, &FilePath::new(&recipe_path))?;
 
     if flags.list {
         print_task_list(&recipe.tasks);

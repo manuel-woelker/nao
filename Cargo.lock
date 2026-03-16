@@ -321,6 +321,7 @@ name = "nao"
 version = "0.1.0"
 dependencies = [
  "nao-base",
+ "nao-pal",
  "nao-recipe",
  "xflags",
 ]
@@ -357,6 +358,7 @@ dependencies = [
  "expect-test",
  "kdl",
  "nao-base",
+ "nao-pal",
 ]
 
 [[package]]

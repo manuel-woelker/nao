@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 kdl = { workspace = true }
 nao-base = { path = "../base" }
+nao-pal = { path = "../pal" }
 
 [dev-dependencies]
 expect-test = { workspace = true }

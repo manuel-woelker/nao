@@ -8,11 +8,11 @@ use crate::task::Task;
 use crate::task_name::TaskName;
 use kdl::{KdlDocument, KdlEntry, KdlNode, KdlValue};
 use nao_base::file_path::FilePath;
-use nao_base::result::{NaoResult, ResultExt};
+use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
+use nao_pal::pal::Pal;
+use nao_pal::pal_real::PalReal;
 use std::collections::BTreeSet;
-use std::fs;
-use std::path::Path;
 
 /// Parses a recipe from a KDL source string.
 pub fn parse_recipe(source: &str) -> Result<Recipe, RecipeError> {
@@ -22,11 +22,15 @@ pub fn parse_recipe(source: &str) -> Result<Recipe, RecipeError> {
     parse_recipe_document(&document)
 }
 
-/// Loads and parses a recipe file from disk.
-pub fn load_recipe(path: impl AsRef<Path>) -> NaoResult<Recipe> {
-    let path = path.as_ref();
-    let source = fs::read_to_string(path)
-        .with_context(|| format!("failed to read recipe file {}", path.display()))?;
+/// Loads and parses a recipe file using the real platform implementation.
+pub fn load_recipe(path: &FilePath) -> NaoResult<Recipe> {
+    let pal = PalReal::new_handle();
+    load_recipe_with_pal(&*pal, path)
+}
+
+/// Loads and parses a recipe file using the supplied platform abstraction.
+pub fn load_recipe_with_pal(pal: &dyn Pal, path: &FilePath) -> NaoResult<Recipe> {
+    let source = pal.read_file_to_string(path)?;
     parse_recipe(&source).map_err(Into::into)
 }
 
@@ -312,10 +316,12 @@ fn parse_string_value(entry: &KdlEntry, description: &str) -> Result<SharedStrin
 
 #[cfg(test)]
 mod tests {
-    use crate::parse_recipe::parse_recipe;
+    use crate::parse_recipe::{load_recipe_with_pal, parse_recipe};
     use crate::run_spec::RunSpec;
     use expect_test::expect;
+    use nao_base::file_path::FilePath;
     use nao_base::shared_string::SharedString;
+    use nao_pal::pal_mock::PalMock;
 
     #[test]
     fn parses_documented_recipe_shape() {
@@ -444,5 +450,26 @@ mod tests {
 
         expect!["task `build` env nodes must use named properties like `env KEY=\"value\"`"]
             .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn loads_recipe_via_pal_mock() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "build" description="Build the workspace" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        );
+
+        let recipe = load_recipe_with_pal(&pal, &FilePath::from("nao.kdl")).unwrap();
+
+        assert_eq!(recipe.name, SharedString::from("default"));
+        assert_eq!(recipe.tasks.len(), 1);
+        expect!["READ FILE: nao.kdl\n"].assert_eq(&pal.get_effects());
     }
 }
