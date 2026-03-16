@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/base", "crates/cli", "crates/recipe"]
+members = ["crates/base", "crates/cli", "crates/recipe", "crates/pal"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -13,5 +13,8 @@ parking_lot = "0.12.5"
 serde = "1.0.228"
 kdl = "6.5.0"
 xflags = "0.3.2"
+ignore = "0.4.24"
+notify-debouncer-full = "0.5.0"
+relative-path = "1.9.3"
 
 expect-test = "1.5.1"

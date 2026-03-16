@@ -4,6 +4,7 @@ pub mod file_path;
 pub mod logging;
 pub mod result;
 pub mod shared_string;
+pub mod timestamp;
 
 pub use parking_lot::{Mutex, RwLock};
 

@@ -1,0 +1,73 @@
+use nao_base::file_path::FilePath;
+use nao_base::result::NaoResult;
+use nao_base::shared_string::SharedString;
+use nao_base::timestamp::Timestamp;
+use std::fmt::Debug;
+use std::io::{Read, Seek};
+use std::sync::Arc;
+
+// Define a new trait combining Read + Seek
+pub trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {} // blanket impl
+
+// Platform abstraction layer used to decouple logic from the underlying platform
+pub trait Pal: Debug + Sync + Send + 'static {
+    /// Does the file exist?
+    fn file_exists(&self, path: &FilePath) -> NaoResult<bool>;
+
+    /// Read a file, the path is relative to the base directory
+    fn read_file(&self, path: &FilePath) -> NaoResult<Box<dyn ReadSeek + 'static>>;
+
+    /// Read a file to a string, the path is relative to the base directory
+    fn read_file_to_string(&self, path: &FilePath) -> NaoResult<SharedString> {
+        let buffer = self.read_file_to_end(path)?;
+        SharedString::from_utf8(&buffer)
+    }
+
+    fn read_file_to_end(&self, path: &FilePath) -> NaoResult<Vec<u8>> {
+        let mut buffer = Vec::new();
+        self.read_file(path)?.read_to_end(&mut buffer)?;
+        Ok(buffer)
+    }
+
+    /// walk directory using the supplied globs
+    fn walk_directory(
+        &self,
+        path: &FilePath,
+        globs: &[String],
+    ) -> NaoResult<Box<dyn Iterator<Item = NaoResult<FilePath>> + '_>>;
+
+    /// Register a callback to be called when a file changes
+    fn watch_directory(
+        &self,
+        directory: &FilePath,
+        globs: &[String],
+        callback: FileChangeCallback,
+    ) -> NaoResult<()>;
+
+    fn now(&self) -> Timestamp;
+}
+
+#[derive(Debug, Clone)]
+pub struct PalHandle(Arc<dyn Pal>);
+
+impl PalHandle {
+    pub fn new(pal: impl Pal + 'static) -> Self {
+        Self(Arc::new(pal))
+    }
+}
+
+// Implement Deref for convenience
+impl std::ops::Deref for PalHandle {
+    type Target = dyn Pal;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+pub struct FileChangeEvent {
+    pub changed_files: Vec<FilePath>,
+}
+
+pub type FileChangeCallback = Box<dyn Fn(FileChangeEvent) -> NaoResult<()> + Send + Sync>;
