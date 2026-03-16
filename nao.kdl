@@ -1,23 +1,23 @@
 recipe "default" {
-  task "build" {
+  task "build" description="Build the workspace" {
     run shell="cargo build --workspace --all-targets --all-features"
   }
 
-  task "fmt" {
+  task "fmt" description="Check code formatting" {
     run shell="cargo fmt --all --check"
   }
 
-  task "clippy" {
+  task "clippy" description="Run clippy across the workspace" {
     depends-on "build"
     run shell="cargo clippy --workspace --all-targets --all-features -- -D warnings"
   }
 
-  task "test" {
+  task "test" description="Run the test suite" {
     depends-on "build"
     run shell="cargo nextest run --workspace --all-targets --all-features"
   }
 
-  task "check-code" {
+  task "check-code" description="Run the full repository verification script" {
     depends-on "fmt"
     depends-on "clippy"
     depends-on "test"

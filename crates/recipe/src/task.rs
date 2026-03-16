@@ -3,12 +3,15 @@ use crate::dependency_name::DependencyName;
 use crate::environment_spec::EnvironmentSpec;
 use crate::run_spec::RunSpec;
 use crate::task_name::TaskName;
+use nao_base::shared_string::SharedString;
 
 /// Represents a task in a recipe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Task {
     /// Task name.
     pub name: TaskName,
+    /// Human-readable task description.
+    pub description: Option<SharedString>,
     /// Named prerequisite tasks.
     pub dependencies: Vec<DependencyName>,
     /// Task execution configuration.

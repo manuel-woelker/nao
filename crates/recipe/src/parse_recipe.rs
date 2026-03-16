@@ -62,6 +62,7 @@ fn parse_recipe_document(document: &KdlDocument) -> Result<Recipe, RecipeError> 
 
 fn parse_task(node: &KdlNode) -> Result<Task, RecipeError> {
     let name = TaskName(parse_required_string_argument(node, "task name")?);
+    let description = parse_optional_string_property(node, "description")?;
     let children = node.children().ok_or_else(|| {
         RecipeError::new(format!("task `{}` must have child nodes", name.as_str()))
     })?;
@@ -109,6 +110,7 @@ fn parse_task(node: &KdlNode) -> Result<Task, RecipeError> {
 
     Ok(Task {
         name,
+        description,
         dependencies,
         run,
         environment,
@@ -320,7 +322,7 @@ mod tests {
         let recipe = parse_recipe(
             r#"
             recipe "default" {
-              task "build" {
+              task "build" description="Build the workspace" {
                 run shell="cargo build --workspace"
                 artifact "workspace-target" path="target"
               }
@@ -353,6 +355,10 @@ mod tests {
 
         assert_eq!(recipe.name, SharedString::from("default"));
         assert_eq!(recipe.tasks.len(), 5);
+        assert_eq!(
+            recipe.tasks[0].description,
+            Some(SharedString::from("Build the workspace"))
+        );
         assert_eq!(recipe.tasks[2].dependencies[0].as_str(), "build");
         assert_eq!(
             recipe.tasks[3].environment[0].name,
