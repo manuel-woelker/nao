@@ -1,7 +1,7 @@
 /target
 /.idea
 /ballpit
-/verification/output/rajac
+/verification/output/now
 perf.data*
 flamegraph.svg
 /verification/sources/verify/simple/classes/
