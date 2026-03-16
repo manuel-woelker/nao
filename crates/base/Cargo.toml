@@ -2,6 +2,9 @@
 name = "nao-base"
 version = "0.1.0"
 edition = "2024"
+description = "Shared base utilities for the nao task runner"
+license = "MIT"
+repository = "https://github.com/manuel-woelker/nao"
 
 [dev-dependencies]
 expect-test = { workspace = true }

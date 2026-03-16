@@ -2,5 +2,8 @@
 name = "nao"
 version = "0.1.0"
 edition = "2024"
+description = "CLI for the nao task runner"
+license = "MIT"
+repository = "https://github.com/manuel-woelker/nao"
 
 [dependencies]
