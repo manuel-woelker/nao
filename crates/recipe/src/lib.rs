@@ -2,7 +2,7 @@
 
 /// Returns the crate name.
 pub fn crate_name() -> &'static str {
-    "recipe"
+    "nao-recipe"
 }
 
 #[cfg(test)]
@@ -11,6 +11,6 @@ mod tests {
 
     #[test]
     fn returns_crate_name() {
-        assert_eq!(crate_name(), "recipe");
+        assert_eq!(crate_name(), "nao-recipe");
     }
 }

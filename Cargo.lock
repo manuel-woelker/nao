@@ -168,6 +168,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nao-recipe"
+version = "0.1.0"
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -234,10 +238,6 @@ checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
 ]
-
-[[package]]
-name = "recipe"
-version = "0.1.0"
 
 [[package]]
 name = "redox_syscall"
