@@ -24,10 +24,21 @@ fn run() -> NaoResult<()> {
     let recipe = load_recipe(&recipe_path)?;
 
     if flags.list {
+        let width = recipe
+            .tasks
+            .iter()
+            .map(|task| task.name.as_str().len())
+            .max()
+            .unwrap_or(0);
+
+        println!("Available tasks:");
+        println!();
+
         for task in &recipe.tasks {
+            let bold_name = format!("\u{1b}[1m{:<width$}\u{1b}[0m", task.name.as_str());
             match &task.description {
-                Some(description) => println!("{}: {}", task.name.as_str(), description),
-                None => println!("{}", task.name.as_str()),
+                Some(description) => println!("  {bold_name}  {description}"),
+                None => println!("  {bold_name}"),
             }
         }
         Ok(())
