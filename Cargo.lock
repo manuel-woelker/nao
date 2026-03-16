@@ -320,6 +320,7 @@ dependencies = [
 name = "nao"
 version = "0.1.0"
 dependencies = [
+ "expect-test",
  "nao-base",
  "nao-pal",
  "nao-recipe",
