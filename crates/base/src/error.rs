@@ -22,14 +22,14 @@ impl Display for ErrorKind {
 }
 
 #[derive(Debug)]
-pub struct NowError {
+pub struct NaoError {
     kind: ErrorKind,
-    source: Option<Box<NowError>>,
+    source: Option<Box<NaoError>>,
     location: &'static Location<'static>,
     span_trace: SpanTrace,
 }
 
-impl NowError {
+impl NaoError {
     #[track_caller]
     pub fn new(kind: ErrorKind) -> Self {
         Self::at_location(kind, Location::caller())
@@ -72,7 +72,7 @@ impl NowError {
         &self.kind
     }
 
-    pub fn source(&self) -> Option<&NowError> {
+    pub fn source(&self) -> Option<&NaoError> {
         self.source.as_deref()
     }
 
@@ -84,14 +84,14 @@ impl NowError {
         &self.span_trace
     }
 
-    pub fn with_source(mut self, source: impl Into<NowError>) -> Self {
+    pub fn with_source(mut self, source: impl Into<NaoError>) -> Self {
         self.source = Some(Box::new(source.into()));
         self
     }
 
     #[track_caller]
     pub fn with_std_source(mut self, source: impl StdError + Send + Sync + 'static) -> Self {
-        self.source = Some(Box::new(NowError::std_at_location(
+        self.source = Some(Box::new(NaoError::std_at_location(
             source,
             Location::caller(),
         )));
@@ -103,7 +103,7 @@ impl NowError {
         source: impl StdError + Send + Sync + 'static,
         location: &'static Location<'static>,
     ) -> Self {
-        self.source = Some(Box::new(NowError::std_at_location(source, location)));
+        self.source = Some(Box::new(NaoError::std_at_location(source, location)));
         self
     }
 
@@ -120,7 +120,7 @@ impl NowError {
     }
 }
 
-impl NowError {
+impl NaoError {
     fn write_details(&self, write: &mut dyn std::fmt::Write, prefix: &str) -> std::fmt::Result {
         let show_span_trace = self.source.is_none();
 
@@ -272,7 +272,7 @@ fn style(code: &str, text: &str) -> String {
     format!("\u{1b}[{code}m{text}\u{1b}[0m")
 }
 
-impl<T> From<T> for NowError
+impl<T> From<T> for NaoError
 where
     T: StdError + Send + Sync + 'static,
 {
@@ -285,7 +285,7 @@ where
 #[macro_export]
 macro_rules! err {
     ($($arg:tt)*) => {
-        $crate::error::NowError::message(format!($($arg)*))
+        $crate::error::NaoError::message(format!($($arg)*))
     };
 }
 pub use err;
@@ -305,13 +305,13 @@ mod tests {
     #[test]
     fn test_format_span_trace_fields() {
         let rendered = format_span_trace_fields(
-            "sources_dir=verification/sources output_dir=verification/output/now",
+            "sources_dir=verification/sources output_dir=verification/output/nao",
         );
         let rendered = crate::unansi(&rendered);
 
         assert_eq!(
             rendered,
-            "sources_dir: verification/sources output_dir: verification/output/now"
+            "sources_dir: verification/sources output_dir: verification/output/nao"
         );
     }
 }

@@ -1,10 +1,10 @@
-# `now`
+# `nao`
 
-`now` is a task runner for local development and CI. It runs tasks in parallel, respects dependencies between tasks, and keeps concurrent output separated so logs stay readable.
+`nao` is a task runner for local development and CI. It runs tasks in parallel, respects dependencies between tasks, and keeps concurrent output separated so logs stay readable.
 
 This project is a work in progress.
 
-## Why use `now`?
+## Why use `nao`?
 
 - Use the same task graph locally and in CI
 - Run independent work in parallel

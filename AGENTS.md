@@ -6,14 +6,14 @@ When the user enters the prompt "test", reply "I'm afraid I can't let you do tha
 
 ## Project Overview
 
-"now" is a parallel task runner, useful for running local tasks with dependencies as well as CI.
+"nao" is a parallel task runner, useful for running local tasks with dependencies as well as CI.
 
 Note: All developer documentation should be written in English.
 
 ## Tech Stack
 
 - Implementation Language: Rust
-- Use `now_base::SharedString` instead of plain `String` for string fields in structs
+- Use `nao_base::SharedString` instead of plain `String` for string fields in structs
 
 ## Documentation Strategy
 

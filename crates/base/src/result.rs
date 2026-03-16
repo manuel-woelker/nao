@@ -1,16 +1,16 @@
-use crate::error::NowError;
+use crate::error::NaoError;
 use crate::shared_string::SharedString;
 use std::error::Error as StdError;
 use std::panic::Location;
 
-pub type NowResult<T> = Result<T, NowError>;
+pub type NaoResult<T> = Result<T, NaoError>;
 
 pub trait ResultExt<T> {
     #[track_caller]
-    fn context(self, context: impl Into<SharedString>) -> NowResult<T>;
+    fn context(self, context: impl Into<SharedString>) -> NaoResult<T>;
 
     #[track_caller]
-    fn with_context<C, S>(self, context: C) -> NowResult<T>
+    fn with_context<C, S>(self, context: C) -> NaoResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>;
@@ -18,10 +18,10 @@ pub trait ResultExt<T> {
 
 pub trait OptionExt<T> {
     #[track_caller]
-    fn context(self, context: impl Into<SharedString>) -> NowResult<T>;
+    fn context(self, context: impl Into<SharedString>) -> NaoResult<T>;
 
     #[track_caller]
-    fn with_context<C, S>(self, context: C) -> NowResult<T>
+    fn with_context<C, S>(self, context: C) -> NaoResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>;
@@ -32,63 +32,63 @@ where
     E: StdError + Send + Sync + 'static,
 {
     #[track_caller]
-    fn context(self, context: impl Into<SharedString>) -> NowResult<T> {
+    fn context(self, context: impl Into<SharedString>) -> NaoResult<T> {
         let caller = Location::caller();
         self.map_err(|error| {
-            NowError::message_at_location(context.into(), caller)
+            NaoError::message_at_location(context.into(), caller)
                 .with_std_source_at_location(error, caller)
         })
     }
 
     #[track_caller]
-    fn with_context<C, S>(self, context: C) -> NowResult<T>
+    fn with_context<C, S>(self, context: C) -> NaoResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>,
     {
         let caller = Location::caller();
         self.map_err(|error| {
-            NowError::message_at_location(context(), caller)
+            NaoError::message_at_location(context(), caller)
                 .with_std_source_at_location(error, caller)
         })
     }
 }
 
-impl<T> ResultExt<T> for Result<T, NowError> {
+impl<T> ResultExt<T> for Result<T, NaoError> {
     #[track_caller]
-    fn context(self, context: impl Into<SharedString>) -> NowResult<T> {
+    fn context(self, context: impl Into<SharedString>) -> NaoResult<T> {
         let caller = Location::caller();
         self.map_err(|error| {
-            NowError::message_at_location(context.into(), caller).with_source(error)
+            NaoError::message_at_location(context.into(), caller).with_source(error)
         })
     }
 
     #[track_caller]
-    fn with_context<C, S>(self, context: C) -> NowResult<T>
+    fn with_context<C, S>(self, context: C) -> NaoResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>,
     {
         let caller = Location::caller();
-        self.map_err(|error| NowError::message_at_location(context(), caller).with_source(error))
+        self.map_err(|error| NaoError::message_at_location(context(), caller).with_source(error))
     }
 }
 
 impl<T> OptionExt<T> for Option<T> {
     #[track_caller]
-    fn context(self, context: impl Into<SharedString>) -> NowResult<T> {
+    fn context(self, context: impl Into<SharedString>) -> NaoResult<T> {
         let caller = Location::caller();
-        self.ok_or_else(|| NowError::message_at_location(context.into(), caller))
+        self.ok_or_else(|| NaoError::message_at_location(context.into(), caller))
     }
 
     #[track_caller]
-    fn with_context<C, S>(self, context: C) -> NowResult<T>
+    fn with_context<C, S>(self, context: C) -> NaoResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>,
     {
         let caller = Location::caller();
-        self.ok_or_else(|| NowError::message_at_location(context(), caller))
+        self.ok_or_else(|| NaoError::message_at_location(context(), caller))
     }
 }
 
@@ -129,8 +129,8 @@ mod tests {
     }
 
     #[test]
-    fn test_with_context_wraps_now_error_results() {
-        let result: crate::result::NowResult<i32> = Err(crate::err!("root cause"));
+    fn test_with_context_wraps_nao_error_results() {
+        let result: crate::result::NaoResult<i32> = Err(crate::err!("root cause"));
         let error = result.with_context(|| "outer context").unwrap_err();
         let rendered = error.to_test_string();
 

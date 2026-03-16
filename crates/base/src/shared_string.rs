@@ -1,6 +1,6 @@
 //! Shared string wrapper type for efficient string handling.
 
-use crate::result::NowResult;
+use crate::result::NaoResult;
 use ecow::EcoString;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -50,7 +50,7 @@ impl SharedString {
         self.0.is_empty()
     }
 
-    pub fn from_utf8(ut8_bytes: &[u8]) -> NowResult<Self> {
+    pub fn from_utf8(ut8_bytes: &[u8]) -> NaoResult<Self> {
         Ok(Self(EcoString::from(str::from_utf8(ut8_bytes)?)))
     }
 }

@@ -1,5 +1,5 @@
 use expect_test::expect;
-use now_base::result::{OptionExt, ResultExt};
+use nao_base::result::{OptionExt, ResultExt};
 use std::io;
 
 /* 📖 # Why keep result formatting tests in a separate file?

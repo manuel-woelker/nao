@@ -1,7 +1,7 @@
 use expect_test::expect;
-use now_base::error::NowError;
-use now_base::logging::{info_span, init_logging};
-use now_base::result::NowResult;
+use nao_base::error::NaoError;
+use nao_base::logging::{info_span, init_logging};
+use nao_base::result::NaoResult;
 
 /* 📖 # Why keep error rendering tests in a separate file?
 These assertions verify track_caller locations and rendered source lines, so the expected file and
@@ -10,7 +10,7 @@ churn when error.rs changes for unrelated implementation reasons.
 */
 #[test]
 fn err_macro_formats_error_with_caller_location() {
-    let error = now_base::err!("test {}", 123);
+    let error = nao_base::err!("test {}", 123);
 
     expect!([r#"
         × error test 123
@@ -21,8 +21,8 @@ fn err_macro_formats_error_with_caller_location() {
 
 #[test]
 fn bail_macro_formats_error_with_caller_location() {
-    let error = (|| -> NowResult<()> {
-        now_base::bail!("test {}", 123);
+    let error = (|| -> NaoResult<()> {
+        nao_base::bail!("test {}", 123);
     })()
     .unwrap_err();
 
@@ -36,7 +36,7 @@ fn bail_macro_formats_error_with_caller_location() {
 #[test]
 fn chained_error_formats_cause_and_locations() {
     let error =
-        NowError::message("failed to read file").with_source(NowError::message("missing file"));
+        NaoError::message("failed to read file").with_source(NaoError::message("missing file"));
 
     expect!([r#"
         × error failed to read file
@@ -50,7 +50,7 @@ fn chained_error_formats_cause_and_locations() {
 #[test]
 fn std_source_error_formats_cause_and_locations() {
     let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "missing config");
-    let error = NowError::message("cannot initialize").with_std_source(io_error);
+    let error = NaoError::message("cannot initialize").with_std_source(io_error);
 
     expect!([r#"
         × error cannot initialize
@@ -67,7 +67,7 @@ fn span_trace_renders_as_structured_frames() {
     let span = info_span!("error_test_span");
     let _guard = span.enter();
 
-    let error = NowError::message("failed inside span");
+    let error = NaoError::message("failed inside span");
 
     expect!([r#"
         × error failed inside span
@@ -88,7 +88,7 @@ fn chained_error_only_renders_root_cause_span_trace() {
     let error = {
         let inner_span = info_span!("inner_error_span");
         let _inner_guard = inner_span.enter();
-        NowError::message("outer failure").with_source(NowError::message("root cause"))
+        NaoError::message("outer failure").with_source(NaoError::message("root cause"))
     };
     drop(outer_guard);
 

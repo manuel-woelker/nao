@@ -1,5 +1,5 @@
-use crate::error::NowError;
-use crate::result::NowResult;
+use crate::error::NaoError;
+use crate::result::NaoResult;
 use std::fmt::Write as _;
 use std::process::ExitCode;
 
@@ -7,7 +7,7 @@ use std::process::ExitCode;
 ///
 /// It runs a fallible entrypoint, prints a readable error report on failure,
 /// and converts the outcome into a process exit code.
-pub fn try_main(run: impl FnOnce() -> NowResult<()>) -> ExitCode {
+pub fn try_main(run: impl FnOnce() -> NaoResult<()>) -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -21,7 +21,7 @@ pub fn try_main(run: impl FnOnce() -> NowResult<()>) -> ExitCode {
 ///
 /// It behaves like [`try_main`], but lets a binary choose a more specific
 /// headline for its top-level error report.
-pub fn try_main_with_headline(headline: &str, run: impl FnOnce() -> NowResult<()>) -> ExitCode {
+pub fn try_main_with_headline(headline: &str, run: impl FnOnce() -> NaoResult<()>) -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -33,9 +33,9 @@ pub fn try_main_with_headline(headline: &str, run: impl FnOnce() -> NowResult<()
 
 /// What does `format_cli_error` return?
 ///
-/// It returns a stable, human-readable rendering of a [`NowError`] that is
+/// It returns a stable, human-readable rendering of a [`NaoError`] that is
 /// suitable for printing from a command-line binary.
-pub fn format_cli_error(headline: &str, error: &NowError) -> String {
+pub fn format_cli_error(headline: &str, error: &NaoError) -> String {
     let mut rendered = String::new();
     let _ = writeln!(&mut rendered, "\u{1b}[1;31m━━ {}\u{1b}[0m", headline);
     error
@@ -69,15 +69,15 @@ pub fn format_cli_error(headline: &str, error: &NowError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::NowError;
+    use crate::error::NaoError;
     use expect_test::expect;
 
     use super::format_cli_error;
 
     #[test]
     fn format_cli_error_renders_headline_and_cause_chain() {
-        let error = NowError::message("failed to verify")
-            .with_source(NowError::message("missing reference output"));
+        let error = NaoError::message("failed to verify")
+            .with_source(NaoError::message("missing reference output"));
 
         expect!([r#"
             ━━ verification failed
