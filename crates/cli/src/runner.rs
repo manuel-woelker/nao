@@ -29,11 +29,12 @@ impl Runner {
             return Ok(self.render_task_list(&self.engine.list_tasks(recipe_path)?));
         }
 
-        Ok(self
-            .engine
-            .execute_run(recipe_path, task_names)?
-            .output
-            .to_string())
+        let result = self.engine.execute_run(recipe_path, task_names)?;
+        Ok(render_success_summary(
+            &result.goal_tasks,
+            result.total_task_count,
+            result.duration_nanos,
+        ))
     }
 
     fn render_task_list(&self, tasks: &[Task]) -> String {
@@ -62,11 +63,53 @@ impl Runner {
     }
 }
 
+fn render_success_summary(
+    goal_tasks: &[nao_base::shared_string::SharedString],
+    total_task_count: usize,
+    duration_nanos: u128,
+) -> String {
+    let bold_goal_tasks = format!(
+        "\u{1b}[1m{}\u{1b}[0m",
+        goal_tasks
+            .iter()
+            .map(|task| task.as_str())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+
+    format!(
+        "Suceeded {bold_goal_tasks} in {} ({} {})\n",
+        pretty_duration(duration_nanos),
+        total_task_count,
+        if total_task_count == 1 {
+            "task"
+        } else {
+            "tasks"
+        }
+    )
+}
+
+fn pretty_duration(duration_nanos: u128) -> String {
+    if duration_nanos < 1_000 {
+        return format!("{duration_nanos}ns");
+    }
+    if duration_nanos < 1_000_000 {
+        return format!("{:.1}us", duration_nanos as f64 / 1_000.0);
+    }
+    if duration_nanos < 1_000_000_000 {
+        return format!("{:.1}ms", duration_nanos as f64 / 1_000_000.0);
+    }
+    format!("{:.1}s", duration_nanos as f64 / 1_000_000_000.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::Runner;
+    use super::pretty_duration;
+    use super::render_success_summary;
     use expect_test::expect;
     use nao_base::file_path::FilePath;
+    use nao_base::shared_string::SharedString;
     use nao_base::timestamp::Timestamp;
     use nao_pal::pal::PalHandle;
     use nao_pal::pal_mock::PalMock;
@@ -154,20 +197,37 @@ mod tests {
         let (runner, pal) = test_runner();
         set_script_process(&pal, "./scripts/build.sh", b"build ok\n");
         set_script_process(&pal, "./scripts/test.sh", b"test ok");
+        pal.set_current_timestamp(Timestamp::new(4));
 
         let output = runner
             .execute(&FilePath::from("nao.kdl"), false, &["test".to_owned()])
             .unwrap();
 
         expect![[r#"
-            Running task `build`
-            [1ns] stdout: build ok
-            [4ns] process exited with code 0
-
-            Running task `test`
-            [2ns] stdout: test ok
-            [4ns] process exited with code 0
+            Suceeded test in 0ns (2 tasks)
         "#]]
-        .assert_eq(&output);
+        .assert_eq(&nao_base::unansi(&output));
+    }
+
+    #[test]
+    fn pretty_prints_durations() {
+        expect!["4ns"].assert_eq(&pretty_duration(4));
+        expect!["1.5us"].assert_eq(&pretty_duration(1_500));
+        expect!["2.5ms"].assert_eq(&pretty_duration(2_500_000));
+        expect!["3.0s"].assert_eq(&pretty_duration(3_000_000_000));
+    }
+
+    #[test]
+    fn renders_multiple_goal_tasks_with_bold_comma_joining() {
+        let rendered = render_success_summary(
+            &[SharedString::from("lint"), SharedString::from("test")],
+            5,
+            2_500_000,
+        );
+
+        expect![[r#"
+            Suceeded lint,test in 2.5ms (5 tasks)
+        "#]]
+        .assert_eq(&nao_base::unansi(&rendered));
     }
 }

@@ -178,6 +178,15 @@ impl RunEngine {
 
         Ok(RunExecutionResult {
             output,
+            goal_tasks: plan
+                .requested_tasks
+                .iter()
+                .map(|task| task.0.clone())
+                .collect(),
+            total_task_count: plan.tasks.len(),
+            duration_nanos: run_finished_at
+                .as_nanos()
+                .saturating_sub(run_started_at.as_nanos()),
             run_directory: writer.run_directory(),
         })
     }
@@ -265,6 +274,7 @@ mod tests {
     use super::RunEngine;
     use expect_test::expect;
     use nao_base::file_path::FilePath;
+    use nao_base::shared_string::SharedString;
     use nao_base::timestamp::Timestamp;
     use nao_pal::pal::PalHandle;
     use nao_pal::pal_mock::PalMock;
@@ -417,6 +427,9 @@ Running task `test`
 "#
         ]
         .assert_eq(output.output.as_str());
+        assert_eq!(output.goal_tasks, vec![SharedString::from("test")]);
+        assert_eq!(output.total_task_count, 2);
+        assert_eq!(output.duration_nanos, 0);
         pal.verify_effects(expect![
             r#"READ FILE: nao.kdl
 CREATE DIRECTORY: .nao/runs
