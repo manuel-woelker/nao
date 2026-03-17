@@ -1,9 +1,11 @@
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
+use nao_base::shared_string::SharedString;
 use nao_engine::RunEngine;
 use nao_pal::pal::PalHandle;
-use nao_recipe::Task;
+use nao_recipe::{Task, TaskName};
 use std::fmt::Write as _;
+use std::io::Write as _;
 
 /// Executes CLI requests against a recipe file.
 pub struct Runner {
@@ -29,7 +31,14 @@ impl Runner {
             return Ok(self.render_task_list(&self.engine.list_tasks(recipe_path)?));
         }
 
-        let result = self.engine.execute_run(recipe_path, task_names)?;
+        let plan = self.engine.plan_run(recipe_path, task_names)?;
+        print!(
+            "{}",
+            render_running_line(&plan.requested_tasks, plan.tasks.len())
+        );
+        std::io::stdout().flush().unwrap();
+
+        let result = self.engine.execute_planned_run(recipe_path, &plan)?;
         Ok(render_success_summary(
             &result.goal_tasks,
             result.total_task_count,
@@ -64,22 +73,15 @@ impl Runner {
 }
 
 fn render_success_summary(
-    goal_tasks: &[nao_base::shared_string::SharedString],
+    goal_tasks: &[SharedString],
     total_task_count: usize,
     duration_nanos: u128,
 ) -> String {
-    let bold_goal_tasks = format!(
-        "\u{1b}[1m{}\u{1b}[0m",
-        goal_tasks
-            .iter()
-            .map(|task| task.as_str())
-            .collect::<Vec<_>>()
-            .join(",")
-    );
+    let bold_goal_tasks = style_bold_white(&join_goal_tasks(goal_tasks));
+    let bold_duration = style_bold_white(&pretty_duration(duration_nanos));
 
     format!(
-        "Suceeded {bold_goal_tasks} in {} ({} {})\n",
-        pretty_duration(duration_nanos),
+        "✅ Suceeded {bold_goal_tasks} in {bold_duration} ({} {})\n",
         total_task_count,
         if total_task_count == 1 {
             "task"
@@ -87,6 +89,40 @@ fn render_success_summary(
             "tasks"
         }
     )
+}
+
+fn render_running_line(goal_tasks: &[TaskName], total_task_count: usize) -> String {
+    let prerequisite_task_count = total_task_count.saturating_sub(goal_tasks.len());
+    format!(
+        "🚀 Running {} and {} prerequisite {}\n",
+        style_bold_white(&join_goal_task_names(goal_tasks)),
+        prerequisite_task_count,
+        if prerequisite_task_count == 1 {
+            "task"
+        } else {
+            "tasks"
+        }
+    )
+}
+
+fn join_goal_tasks(goal_tasks: &[SharedString]) -> String {
+    goal_tasks
+        .iter()
+        .map(|task| task.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn join_goal_task_names(goal_tasks: &[TaskName]) -> String {
+    goal_tasks
+        .iter()
+        .map(|task| task.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn style_bold_white(text: &str) -> String {
+    format!("\u{1b}[1;37m{text}\u{1b}[0m")
 }
 
 fn pretty_duration(duration_nanos: u128) -> String {
@@ -106,6 +142,7 @@ fn pretty_duration(duration_nanos: u128) -> String {
 mod tests {
     use super::Runner;
     use super::pretty_duration;
+    use super::render_running_line;
     use super::render_success_summary;
     use expect_test::expect;
     use nao_base::file_path::FilePath;
@@ -120,6 +157,7 @@ mod tests {
     use nao_pal::process_output_stream::ProcessOutputStream;
     use nao_pal::process_result::ProcessResult;
     use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
+    use nao_recipe::TaskName;
 
     fn test_runner() -> (Runner, PalMock) {
         let pal = PalMock::new();
@@ -204,7 +242,7 @@ mod tests {
             .unwrap();
 
         expect![[r#"
-            Suceeded test in 0ns (2 tasks)
+            ✅ Suceeded test in 0ns (2 tasks)
         "#]]
         .assert_eq(&nao_base::unansi(&output));
     }
@@ -226,7 +264,17 @@ mod tests {
         );
 
         expect![[r#"
-            Suceeded lint,test in 2.5ms (5 tasks)
+            ✅ Suceeded lint,test in 2.5ms (5 tasks)
+        "#]]
+        .assert_eq(&nao_base::unansi(&rendered));
+    }
+
+    #[test]
+    fn renders_running_line_with_prerequisite_count() {
+        let rendered = render_running_line(&[TaskName::from("lint"), TaskName::from("test")], 5);
+
+        expect![[r#"
+            🚀 Running lint,test and 3 prerequisite tasks
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
     }

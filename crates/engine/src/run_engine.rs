@@ -70,6 +70,15 @@ impl RunEngine {
         task_names: &[String],
     ) -> NaoResult<RunExecutionResult> {
         let plan = self.plan_run(recipe_path, task_names)?;
+        self.execute_planned_run(recipe_path, &plan)
+    }
+
+    /// Executes an already planned run sequentially and returns rendered output.
+    pub fn execute_planned_run(
+        &self,
+        recipe_path: &FilePath,
+        plan: &PlannedRun,
+    ) -> NaoResult<RunExecutionResult> {
         let recipe_directory = recipe_path.parent().unwrap_or_else(|| FilePath::from("."));
         let recipe_directory = if recipe_directory.as_str().is_empty() {
             FilePath::from(".")
@@ -81,11 +90,15 @@ impl RunEngine {
         let writer = RunArtifactWriter::new(
             self.pal.clone(),
             &recipe_directory,
-            task_names,
+            &plan
+                .requested_tasks
+                .iter()
+                .map(|task| task.as_str().to_owned())
+                .collect::<Vec<_>>(),
             run_started_at,
             run_started_system_time,
         );
-        writer.write_plan(&plan)?;
+        writer.write_plan(plan)?;
         let mut output = SharedString::empty();
         let mut task_records = Vec::new();
         let mut failure_message = None;
@@ -165,7 +178,7 @@ impl RunEngine {
         let run_finished_at = self.pal.now();
         let overall_result = if failed { "failed" } else { "completed" };
         writer.write_completion(
-            &plan,
+            plan,
             &task_records,
             run_finished_at,
             overall_result,
