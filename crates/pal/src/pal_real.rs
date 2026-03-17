@@ -1,4 +1,13 @@
 use crate::pal::{FileChangeCallback, FileChangeEvent, Pal, PalHandle, ReadSeek};
+use crate::process_command::ProcessCommand;
+use crate::process_event::ProcessEvent;
+use crate::process_event_sink::ProcessEventSink;
+use crate::process_exited_event::ProcessExitedEvent;
+use crate::process_output_event::ProcessOutputEvent;
+use crate::process_output_stream::ProcessOutputStream;
+use crate::process_result::ProcessResult;
+use crate::process_started_event::ProcessStartedEvent;
+use crate::process_stream_closed_event::ProcessStreamClosedEvent;
 use ignore::WalkBuilder;
 use ignore::gitignore::GitignoreBuilder;
 use ignore::overrides::OverrideBuilder;
@@ -6,19 +15,25 @@ use nao_base::RwLock;
 use nao_base::bail;
 use nao_base::file_path::FilePath;
 use nao_base::logging::{error, info};
-use nao_base::result::{NaoResult, ResultExt};
+use nao_base::result::{NaoResult, OptionExt, ResultExt};
 use nao_base::timestamp::Timestamp;
 use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use std::fmt::Debug;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::Command;
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
 
 pub struct PalReal {
     base_path: PathBuf,
     watchers: RwLock<Vec<Debouncer<RecommendedWatcher, RecommendedCache>>>,
     reference_instant: Instant,
+    runtime: Runtime,
 }
 
 impl PalReal {
@@ -32,6 +47,7 @@ impl PalReal {
             base_path: current_dir,
             watchers: RwLock::new(Vec::new()),
             reference_instant: Instant::now(),
+            runtime: Runtime::new().expect("Unable to create Tokio runtime"),
         }
     }
 
@@ -48,6 +64,118 @@ impl PalReal {
             )
         })?;
         Ok(FilePath::new(relative_path))
+    }
+
+    fn resolve_process_path(&self, path: &FilePath) -> NaoResult<PathBuf> {
+        if path.is_absolute() {
+            Ok(path.as_path().to_path_buf())
+        } else {
+            self.resolve_path(path)
+        }
+    }
+
+    fn resolve_working_directory(&self, path: &FilePath) -> NaoResult<PathBuf> {
+        self.resolve_process_path(path)
+    }
+
+    fn timestamp_from(reference_instant: &Instant) -> Timestamp {
+        Timestamp::new(reference_instant.elapsed().as_nanos())
+    }
+
+    async fn run_process_async(
+        &self,
+        command: &ProcessCommand,
+        sink: &mut dyn ProcessEventSink,
+    ) -> NaoResult<ProcessResult> {
+        let mut child_command = Command::new(command.executable.as_str());
+        child_command.args(command.arguments.iter().map(|argument| argument.as_str()));
+        child_command.stdout(Stdio::piped());
+        child_command.stderr(Stdio::piped());
+
+        if let Some(working_directory) = &command.working_directory {
+            child_command.current_dir(self.resolve_working_directory(working_directory)?);
+        }
+
+        for variable in &command.environment {
+            child_command.env(variable.name.as_str(), variable.value.as_str());
+        }
+
+        let mut child = child_command.spawn().with_context(|| {
+            format!("Unable to spawn process '{}'", command.executable.as_str())
+        })?;
+        let reference_instant = self.reference_instant;
+        let started_at = Self::timestamp_from(&reference_instant);
+        sink.handle_event(ProcessEvent::Started(ProcessStartedEvent {
+            timestamp: started_at,
+            process_id: child.id(),
+        }))?;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut expected_stream_closes = 0usize;
+
+        if let Some(stdout) = child.stdout.take() {
+            expected_stream_closes += 1;
+            tokio::spawn(read_stream(
+                stdout,
+                ProcessOutputStream::Stdout,
+                reference_instant,
+                tx.clone(),
+            ));
+        }
+
+        if let Some(stderr) = child.stderr.take() {
+            expected_stream_closes += 1;
+            tokio::spawn(read_stream(
+                stderr,
+                ProcessOutputStream::Stderr,
+                reference_instant,
+                tx.clone(),
+            ));
+        }
+
+        let mut stream_closes = 0usize;
+        let mut finished_at = started_at;
+        let mut exit_code = None;
+        let mut wait_future = Box::pin(child.wait());
+        let mut exit_observed = false;
+
+        while !exit_observed || stream_closes < expected_stream_closes {
+            tokio::select! {
+                maybe_event = rx.recv(), if stream_closes < expected_stream_closes => {
+                    let event = maybe_event.context("Process output channel closed unexpectedly")?;
+                    if let ProcessEvent::StreamClosed(_) = &event {
+                        stream_closes += 1;
+                    }
+                    sink.handle_event(event).with_context(|| {
+                        format!(
+                            "Unable to deliver process event for '{}'",
+                            command.executable.as_str()
+                        )
+                    })?;
+                }
+                exit_status = &mut wait_future, if !exit_observed => {
+                    let exit_status = exit_status.with_context(|| {
+                        format!(
+                            "Unable to wait for process '{}'",
+                            command.executable.as_str()
+                        )
+                    })?;
+                    finished_at = Self::timestamp_from(&reference_instant);
+                    exit_code = exit_status.code();
+                    sink.handle_event(ProcessEvent::Exited(ProcessExitedEvent {
+                        timestamp: finished_at,
+                        exit_code,
+                    }))?;
+                    exit_observed = true;
+                }
+            }
+        }
+
+        Ok(ProcessResult {
+            started_at,
+            finished_at,
+            exit_code,
+        })
     }
 }
 
@@ -158,6 +286,14 @@ impl Pal for PalReal {
         Ok(())
     }
 
+    fn run_process(
+        &self,
+        command: &ProcessCommand,
+        sink: &mut dyn ProcessEventSink,
+    ) -> NaoResult<ProcessResult> {
+        self.runtime.block_on(self.run_process_async(command, sink))
+    }
+
     fn now(&self) -> Timestamp {
         Timestamp::new(self.reference_instant.elapsed().as_nanos())
     }
@@ -166,5 +302,42 @@ impl Pal for PalReal {
 impl Debug for PalReal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PalReal").finish()
+    }
+}
+
+async fn read_stream<R>(
+    mut reader: R,
+    stream: ProcessOutputStream,
+    reference_instant: Instant,
+    tx: mpsc::UnboundedSender<ProcessEvent>,
+) where
+    R: AsyncRead + Unpin,
+{
+    let mut buffer = [0u8; 4096];
+
+    loop {
+        match reader.read(&mut buffer).await {
+            Ok(0) => {
+                let _ = tx.send(ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: PalReal::timestamp_from(&reference_instant),
+                    stream,
+                }));
+                return;
+            }
+            Ok(read) => {
+                let _ = tx.send(ProcessEvent::Output(ProcessOutputEvent {
+                    timestamp: PalReal::timestamp_from(&reference_instant),
+                    stream,
+                    bytes: buffer[..read].to_vec(),
+                }));
+            }
+            Err(_) => {
+                let _ = tx.send(ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: PalReal::timestamp_from(&reference_instant),
+                    stream,
+                }));
+                return;
+            }
+        }
     }
 }

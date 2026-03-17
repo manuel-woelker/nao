@@ -1,3 +1,6 @@
+use crate::process_command::ProcessCommand;
+use crate::process_event_sink::ProcessEventSink;
+use crate::process_result::ProcessResult;
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
@@ -44,6 +47,13 @@ pub trait Pal: Debug + Sync + Send + 'static {
         globs: &[String],
         callback: FileChangeCallback,
     ) -> NaoResult<()>;
+
+    /// Execute a child process and synchronously forward process events to the sink.
+    fn run_process(
+        &self,
+        command: &ProcessCommand,
+        sink: &mut dyn ProcessEventSink,
+    ) -> NaoResult<ProcessResult>;
 
     fn now(&self) -> Timestamp;
 }

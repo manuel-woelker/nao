@@ -2,7 +2,7 @@ use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
 use nao_engine::RunEngine;
 use nao_pal::pal::PalHandle;
-use nao_recipe::{RunSpec, Task};
+use nao_recipe::Task;
 use std::fmt::Write as _;
 
 /// Executes CLI requests against a recipe file.
@@ -29,16 +29,11 @@ impl Runner {
             return Ok(self.render_task_list(&self.engine.list_tasks(recipe_path)?));
         }
 
-        let plan = self.engine.plan_run(recipe_path, task_names)?;
-        let mut output = String::new();
-        for (index, task) in plan.tasks.iter().enumerate() {
-            if index > 0 {
-                output.push('\n');
-            }
-            self.write_task_preview(&mut output, task);
-        }
-
-        Ok(output)
+        Ok(self
+            .engine
+            .execute_run(recipe_path, task_names)?
+            .output
+            .to_string())
     }
 
     fn render_task_list(&self, tasks: &[Task]) -> String {
@@ -65,68 +60,6 @@ impl Runner {
 
         output
     }
-
-    fn write_task_preview(&self, output: &mut String, task: &Task) {
-        output.push_str("Pretending to run task:\n\n");
-        let _ = writeln!(output, "  name: {}", task.name.as_str());
-
-        match &task.description {
-            Some(description) => {
-                let _ = writeln!(output, "  description: {description}");
-            }
-            None => output.push_str("  description: <none>\n"),
-        }
-
-        if task.dependencies.is_empty() {
-            output.push_str("  dependencies: <none>\n");
-        } else {
-            let dependencies = task
-                .dependencies
-                .iter()
-                .map(|dependency| dependency.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let _ = writeln!(output, "  dependencies: {dependencies}");
-        }
-
-        match &task.run {
-            RunSpec::Shell(command) => {
-                output.push_str("  run: shell\n");
-                let _ = writeln!(output, "  command: {command}");
-            }
-            RunSpec::Script(script) => {
-                output.push_str("  run: script\n");
-                let _ = writeln!(output, "  path: {}", script.as_str());
-            }
-            RunSpec::Container(container) => {
-                output.push_str("  run: container\n");
-                let _ = writeln!(output, "  image: {}", container.image);
-                if container.args.is_empty() {
-                    output.push_str("  args: <none>\n");
-                } else {
-                    let _ = writeln!(output, "  args: {}", container.args.join(" "));
-                }
-            }
-        }
-
-        if task.environment.is_empty() {
-            output.push_str("  env: <none>\n");
-        } else {
-            output.push_str("  env:\n");
-            for environment in &task.environment {
-                let _ = writeln!(output, "    {}={}", environment.name, environment.value);
-            }
-        }
-
-        if task.artifacts.is_empty() {
-            output.push_str("  artifacts: <none>\n");
-        } else {
-            output.push_str("  artifacts:\n");
-            for artifact in &task.artifacts {
-                let _ = writeln!(output, "    {} -> {}", artifact.name, artifact.path);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -134,32 +67,76 @@ mod tests {
     use super::Runner;
     use expect_test::expect;
     use nao_base::file_path::FilePath;
+    use nao_base::timestamp::Timestamp;
     use nao_pal::pal::PalHandle;
     use nao_pal::pal_mock::PalMock;
+    use nao_pal::process_command::ProcessCommand;
+    use nao_pal::process_event::ProcessEvent;
+    use nao_pal::process_exited_event::ProcessExitedEvent;
+    use nao_pal::process_output_event::ProcessOutputEvent;
+    use nao_pal::process_output_stream::ProcessOutputStream;
+    use nao_pal::process_result::ProcessResult;
+    use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
 
-    fn test_runner() -> Runner {
+    fn test_runner() -> (Runner, PalMock) {
         let pal = PalMock::new();
         pal.set_file(
             "nao.kdl",
             r#"
             recipe "default" {
               task "build" description="Build the workspace" {
-                run shell="cargo build --workspace --all-targets --all-features"
+                run script="./scripts/build.sh"
               }
 
               task "test" description="Run the test suite" {
                 depends-on "build"
-                run shell="cargo nextest run --workspace --all-targets --all-features"
+                run script="./scripts/test.sh"
               }
             }
             "#,
         );
-        Runner::new(PalHandle::new(pal))
+        (Runner::new(PalHandle::new(pal.clone())), pal)
+    }
+
+    fn set_script_process(pal: &PalMock, script: &str, bytes: &[u8]) {
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: script.into(),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::Output(ProcessOutputEvent {
+                    timestamp: Timestamp::new(1),
+                    stream: ProcessOutputStream::Stdout,
+                    bytes: bytes.to_vec(),
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(2),
+                    stream: ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(3),
+                    stream: ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(4),
+                    exit_code: Some(0),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(4),
+                exit_code: Some(0),
+            },
+        );
     }
 
     #[test]
     fn renders_task_list() {
-        let output = test_runner()
+        let (runner, _) = test_runner();
+        let output = runner
             .execute(&FilePath::from("nao.kdl"), true, &[])
             .unwrap();
 
@@ -173,21 +150,23 @@ mod tests {
     }
 
     #[test]
-    fn renders_selected_task_preview() {
-        let output = test_runner()
+    fn executes_selected_tasks() {
+        let (runner, pal) = test_runner();
+        set_script_process(&pal, "./scripts/build.sh", b"build ok\n");
+        set_script_process(&pal, "./scripts/test.sh", b"test ok");
+
+        let output = runner
             .execute(&FilePath::from("nao.kdl"), false, &["test".to_owned()])
             .unwrap();
 
         expect![[r#"
-            Pretending to run task:
+            Running task `build`
+            [1ns] stdout: build ok
+            [4ns] process exited with code 0
 
-              name: test
-              description: Run the test suite
-              dependencies: build
-              run: shell
-              command: cargo nextest run --workspace --all-targets --all-features
-              env: <none>
-              artifacts: <none>
+            Running task `test`
+            [2ns] stdout: test ok
+            [4ns] process exited with code 0
         "#]]
         .assert_eq(&output);
     }

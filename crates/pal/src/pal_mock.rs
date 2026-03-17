@@ -1,4 +1,8 @@
 use crate::pal::{FileChangeCallback, Pal, ReadSeek};
+use crate::process_command::ProcessCommand;
+use crate::process_event::ProcessEvent;
+use crate::process_event_sink::ProcessEventSink;
+use crate::process_result::ProcessResult;
 use expect_test::Expect;
 use nao_base::RwLock;
 use nao_base::file_path::FilePath;
@@ -18,6 +22,7 @@ pub struct PalMock {
 struct PalMockInner {
     effects_string: String,
     file_map: HashMap<FilePath, Vec<u8>>,
+    process_executions: HashMap<ProcessCommand, (Vec<ProcessEvent>, ProcessResult)>,
     current_timestamp: Timestamp,
 }
 
@@ -27,6 +32,7 @@ impl PalMock {
             inner: Arc::new(RwLock::new(PalMockInner {
                 effects_string: String::new(),
                 file_map: HashMap::new(),
+                process_executions: HashMap::new(),
                 current_timestamp: Timestamp::new(0),
             })),
         }
@@ -58,11 +64,23 @@ impl PalMock {
             .file_map
             .insert(FilePath::from(file_path), content.into());
     }
+
+    pub fn set_process_execution(
+        &self,
+        command: ProcessCommand,
+        events: Vec<ProcessEvent>,
+        result: ProcessResult,
+    ) {
+        self.inner
+            .write()
+            .process_executions
+            .insert(command, (events, result));
+    }
 }
 
 impl Pal for PalMock {
-    fn file_exists(&self, _path: &FilePath) -> NaoResult<bool> {
-        Ok(false)
+    fn file_exists(&self, path: &FilePath) -> NaoResult<bool> {
+        Ok(self.inner.read().file_map.contains_key(path))
     }
 
     fn read_file(&self, path: &FilePath) -> NaoResult<Box<dyn ReadSeek + 'static>> {
@@ -98,6 +116,41 @@ impl Pal for PalMock {
         _callback: FileChangeCallback,
     ) -> NaoResult<()> {
         Ok(())
+    }
+
+    fn run_process(
+        &self,
+        command: &ProcessCommand,
+        sink: &mut dyn ProcessEventSink,
+    ) -> NaoResult<ProcessResult> {
+        self.log_effect(format!(
+            "RUN PROCESS: {} {}",
+            command.executable,
+            command
+                .arguments
+                .iter()
+                .map(|argument| argument.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+        let (events, result) = self
+            .inner
+            .read()
+            .process_executions
+            .get(command)
+            .cloned()
+            .with_context(|| {
+                format!(
+                    "No process execution registered for '{}'",
+                    command.executable
+                )
+            })?;
+
+        for event in events {
+            sink.handle_event(event)?;
+        }
+
+        Ok(result)
     }
 
     fn now(&self) -> Timestamp {
