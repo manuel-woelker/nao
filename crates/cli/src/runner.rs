@@ -1,14 +1,19 @@
+use core::fmt::Write as _;
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
 use nao_engine::RunEngine;
 use nao_pal::pal::PalHandle;
 use nao_recipe::{Task, TaskName};
-use std::fmt::Write as _;
 use std::io::Write as _;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 
 /// Executes CLI requests against a recipe file.
 pub struct Runner {
+    pal: PalHandle,
     engine: RunEngine,
 }
 
@@ -16,6 +21,7 @@ impl Runner {
     /// Creates a new runner for the provided platform abstraction.
     pub fn new(pal: PalHandle) -> Self {
         Self {
+            pal: pal.clone(),
             engine: RunEngine::new(pal),
         }
     }
@@ -32,13 +38,17 @@ impl Runner {
         }
 
         let plan = self.engine.plan_run(recipe_path, task_names)?;
-        print!(
-            "{}",
-            render_running_line(&plan.requested_tasks, plan.tasks.len())
-        );
-        std::io::stdout().flush().unwrap();
+        let running_line_body = render_running_line_body(&plan.requested_tasks, plan.tasks.len());
+        let spinner = if self.pal.is_interactive_terminal() {
+            Some(RunningSpinner::start(running_line_body.clone()))
+        } else {
+            print!("{}", render_running_line(&running_line_body));
+            std::io::stdout().flush().unwrap();
+            None
+        };
 
         let result = self.engine.execute_planned_run(recipe_path, &plan)?;
+        drop(spinner);
         Ok(render_success_summary(
             &result.goal_tasks,
             result.total_task_count,
@@ -91,10 +101,14 @@ fn render_success_summary(
     )
 }
 
-fn render_running_line(goal_tasks: &[TaskName], total_task_count: usize) -> String {
+fn render_running_line(line_body: &str) -> String {
+    format!("🚀 {line_body}\n")
+}
+
+fn render_running_line_body(goal_tasks: &[TaskName], total_task_count: usize) -> String {
     let prerequisite_task_count = total_task_count.saturating_sub(goal_tasks.len());
     format!(
-        "🚀 Running {} and {} prerequisite {}\n",
+        "Running {} and {} prerequisite {}",
         style_bold_white(&join_goal_task_names(goal_tasks)),
         prerequisite_task_count,
         if prerequisite_task_count == 1 {
@@ -125,6 +139,46 @@ fn style_bold_white(text: &str) -> String {
     format!("\u{1b}[1;37m{text}\u{1b}[0m")
 }
 
+struct RunningSpinner {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl RunningSpinner {
+    fn start(line: String) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = thread::spawn(move || {
+            const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let mut frame_index = 0usize;
+
+            while !thread_stop.load(Ordering::Relaxed) {
+                print!("\r{} {}", FRAMES[frame_index], line);
+                std::io::stdout().flush().unwrap();
+                frame_index = (frame_index + 1) % FRAMES.len();
+                thread::sleep(Duration::from_millis(80));
+            }
+
+            print!("\r🚀 {}\x1b[K\n", line);
+            std::io::stdout().flush().unwrap();
+        });
+
+        Self {
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for RunningSpinner {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            handle.join().unwrap();
+        }
+    }
+}
+
 fn pretty_duration(duration_nanos: u128) -> String {
     if duration_nanos < 1_000 {
         return format!("{duration_nanos}ns");
@@ -143,6 +197,7 @@ mod tests {
     use super::Runner;
     use super::pretty_duration;
     use super::render_running_line;
+    use super::render_running_line_body;
     use super::render_success_summary;
     use expect_test::expect;
     use nao_base::file_path::FilePath;
@@ -271,7 +326,10 @@ mod tests {
 
     #[test]
     fn renders_running_line_with_prerequisite_count() {
-        let rendered = render_running_line(&[TaskName::from("lint"), TaskName::from("test")], 5);
+        let rendered = render_running_line(&render_running_line_body(
+            &[TaskName::from("lint"), TaskName::from("test")],
+            5,
+        ));
 
         expect![[r#"
             🚀 Running lint,test and 3 prerequisite tasks

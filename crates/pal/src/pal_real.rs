@@ -21,6 +21,7 @@ use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use std::fmt::Debug;
 use std::fs::File;
+use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime};
@@ -304,6 +305,10 @@ impl Pal for PalReal {
         std::fs::write(self.resolve_process_path(path)?, content)
             .with_context(|| format!("Unable to write file '{}'", path))?;
         Ok(())
+    }
+
+    fn is_interactive_terminal(&self) -> bool {
+        std::io::stdout().is_terminal()
     }
 
     fn run_process(

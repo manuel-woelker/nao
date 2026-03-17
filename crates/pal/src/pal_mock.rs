@@ -23,6 +23,7 @@ struct PalMockInner {
     effects_string: String,
     file_map: HashMap<FilePath, Vec<u8>>,
     process_executions: HashMap<ProcessCommand, (Vec<ProcessEvent>, ProcessResult)>,
+    interactive_terminal: bool,
     current_timestamp: Timestamp,
     current_system_time: SystemTime,
 }
@@ -34,6 +35,7 @@ impl PalMock {
                 effects_string: String::new(),
                 file_map: HashMap::new(),
                 process_executions: HashMap::new(),
+                interactive_terminal: false,
                 current_timestamp: Timestamp::new(0),
                 current_system_time: SystemTime::UNIX_EPOCH,
             })),
@@ -81,6 +83,10 @@ impl PalMock {
 
     pub fn set_current_timestamp(&self, timestamp: Timestamp) {
         self.inner.write().current_timestamp = timestamp;
+    }
+
+    pub fn set_interactive_terminal(&self, interactive_terminal: bool) {
+        self.inner.write().interactive_terminal = interactive_terminal;
     }
 
     pub fn set_current_system_time(&self, system_time: SystemTime) {
@@ -163,6 +169,10 @@ impl Pal for PalMock {
             .file_map
             .insert(path.clone(), content.to_vec());
         Ok(())
+    }
+
+    fn is_interactive_terminal(&self) -> bool {
+        self.inner.read().interactive_terminal
     }
 
     fn run_process(
