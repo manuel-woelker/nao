@@ -1,19 +1,21 @@
-use nao_base::err;
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
+use nao_engine::RunEngine;
 use nao_pal::pal::PalHandle;
-use nao_recipe::{RunSpec, Task, load_recipe_with_pal};
+use nao_recipe::{RunSpec, Task};
 use std::fmt::Write as _;
 
 /// Executes CLI requests against a recipe file.
 pub struct Runner {
-    pal: PalHandle,
+    engine: RunEngine,
 }
 
 impl Runner {
     /// Creates a new runner for the provided platform abstraction.
     pub fn new(pal: PalHandle) -> Self {
-        Self { pal }
+        Self {
+            engine: RunEngine::new(pal),
+        }
     }
 
     /// Executes the requested CLI action and returns the rendered output.
@@ -23,24 +25,13 @@ impl Runner {
         list: bool,
         task_names: &[String],
     ) -> NaoResult<String> {
-        let recipe = load_recipe_with_pal(&*self.pal, recipe_path)?;
-
         if list {
-            return Ok(self.render_task_list(&recipe.tasks));
+            return Ok(self.render_task_list(&self.engine.list_tasks(recipe_path)?));
         }
 
-        if task_names.is_empty() {
-            return Err(err!("usage: nao [--list] [task-name...] [recipe-file]"));
-        }
-
+        let plan = self.engine.plan_run(recipe_path, task_names)?;
         let mut output = String::new();
-        for (index, task_name) in task_names.iter().enumerate() {
-            let task = recipe
-                .tasks
-                .iter()
-                .find(|task| task.name.as_str() == task_name)
-                .ok_or_else(|| err!("task `{task_name}` not found"))?;
-
+        for (index, task) in plan.tasks.iter().enumerate() {
             if index > 0 {
                 output.push('\n');
             }

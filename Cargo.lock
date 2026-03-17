@@ -322,6 +322,7 @@ version = "0.1.0"
 dependencies = [
  "expect-test",
  "nao-base",
+ "nao-engine",
  "nao-pal",
  "nao-recipe",
  "xflags",
@@ -339,6 +340,16 @@ dependencies = [
  "tracing",
  "tracing-error",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "nao-engine"
+version = "0.1.0"
+dependencies = [
+ "expect-test",
+ "nao-base",
+ "nao-pal",
+ "nao-recipe",
 ]
 
 [[package]]

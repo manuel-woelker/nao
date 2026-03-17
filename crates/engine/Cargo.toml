@@ -1,17 +1,18 @@
 [package]
-name = "nao"
+name = "nao-engine"
 version = "0.1.0"
 edition = "2024"
-description = "CLI for the nao task runner"
+description = "Run planning engine for the nao task runner"
 license = "MIT"
 repository = "https://github.com/manuel-woelker/nao"
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 nao-base = { path = "../base" }
-nao-engine = { path = "../engine" }
 nao-pal = { path = "../pal" }
 nao-recipe = { path = "../recipe" }
-xflags = { workspace = true }
 
 [dev-dependencies]
 expect-test = { workspace = true }
