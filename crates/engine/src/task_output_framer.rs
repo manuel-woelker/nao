@@ -11,6 +11,7 @@ use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
 /// Buffers raw process chunks and renders timestamp-prefixed task output lines.
 pub struct TaskOutputFramer {
     output: String,
+    log_lines: Vec<(Timestamp, ProcessOutputStream, String)>,
     stdout_buffer: Vec<u8>,
     stderr_buffer: Vec<u8>,
 }
@@ -20,6 +21,7 @@ impl TaskOutputFramer {
     pub fn new() -> Self {
         Self {
             output: String::new(),
+            log_lines: Vec::new(),
             stdout_buffer: Vec::new(),
             stderr_buffer: Vec::new(),
         }
@@ -35,9 +37,9 @@ impl TaskOutputFramer {
         self.output.push_str("`\n");
     }
 
-    /// Converts the rendered output into the engine shared string type.
-    pub fn into_output(self) -> SharedString {
-        SharedString::from(self.output)
+    /// Returns the rendered terminal output together with the collected task log lines.
+    pub fn into_parts(self) -> (SharedString, Vec<(Timestamp, ProcessOutputStream, String)>) {
+        (SharedString::from(self.output), self.log_lines)
     }
 
     fn handle_output_event(&mut self, event: ProcessOutputEvent) {
@@ -107,12 +109,14 @@ impl TaskOutputFramer {
             ProcessOutputStream::Stdout => "stdout",
             ProcessOutputStream::Stderr => "stderr",
         };
+        let rendered_line = String::from_utf8_lossy(line).into_owned();
         self.output.push_str(&format!(
             "[{}] {}: {}\n",
             format_timestamp(timestamp),
             stream_name,
-            String::from_utf8_lossy(line)
+            rendered_line
         ));
+        self.log_lines.push((timestamp, stream, rendered_line));
     }
 }
 
@@ -175,13 +179,15 @@ mod tests {
             }))
             .unwrap();
 
+        let (output, _) = framer.into_parts();
+
         expect![
             r#"Running task `build`
 [2ns] stdout: hello world
 [3ns] stdout: again
 "#
         ]
-        .assert_eq(framer.into_output().as_str());
+        .assert_eq(output.as_str());
     }
 
     #[test]
@@ -195,11 +201,13 @@ mod tests {
             }))
             .unwrap();
 
+        let (output, _) = framer.into_parts();
+
         expect![
             r#"Running task `test`
 [7ns] process exited with code 1
 "#
         ]
-        .assert_eq(framer.into_output().as_str());
+        .assert_eq(output.as_str());
     }
 }

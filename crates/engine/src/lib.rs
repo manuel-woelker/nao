@@ -1,4 +1,5 @@
 pub mod planned_run;
+pub mod run_artifact_writer;
 pub mod run_engine;
 pub mod run_execution_result;
 pub mod task_output_framer;

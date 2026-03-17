@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::runtime::Runtime;
@@ -33,6 +33,14 @@ pub struct PalReal {
     base_path: PathBuf,
     watchers: RwLock<Vec<Debouncer<RecommendedWatcher, RecommendedCache>>>,
     reference_instant: Instant,
+    /* 📖 # Why keep the Tokio runtime private to `PalReal`?
+    `nao-engine` uses a synchronous PAL boundary so the rest of the workspace does not need to
+    depend on Tokio or expose async process types through domain APIs.
+
+    `PalReal` still needs async I/O internally to read child process pipes efficiently on Linux
+    and Windows, so it owns one shared runtime and translates those async operations into
+    synchronous `run_process` calls with sink-delivered events.
+    */
     runtime: Runtime,
 }
 
@@ -286,6 +294,18 @@ impl Pal for PalReal {
         Ok(())
     }
 
+    fn create_directory_all(&self, path: &FilePath) -> NaoResult<()> {
+        std::fs::create_dir_all(self.resolve_process_path(path)?)
+            .with_context(|| format!("Unable to create directory '{}'", path))?;
+        Ok(())
+    }
+
+    fn write_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()> {
+        std::fs::write(self.resolve_process_path(path)?, content)
+            .with_context(|| format!("Unable to write file '{}'", path))?;
+        Ok(())
+    }
+
     fn run_process(
         &self,
         command: &ProcessCommand,
@@ -296,6 +316,10 @@ impl Pal for PalReal {
 
     fn now(&self) -> Timestamp {
         Timestamp::new(self.reference_instant.elapsed().as_nanos())
+    }
+
+    fn system_time(&self) -> SystemTime {
+        SystemTime::now()
     }
 }
 
@@ -339,5 +363,76 @@ async fn read_stream<R>(
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PalReal;
+    use crate::pal::Pal;
+    use crate::process_command::ProcessCommand;
+    use crate::process_event::ProcessEvent;
+    use crate::process_event_sink::ProcessEventSink;
+    use nao_base::result::NaoResult;
+    use nao_base::shared_string::SharedString;
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: Vec<ProcessEvent>,
+    }
+
+    impl ProcessEventSink for RecordingSink {
+        fn handle_event(&mut self, event: ProcessEvent) -> NaoResult<()> {
+            self.events.push(event);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn runs_process_and_reports_events() {
+        let pal = PalReal::new();
+        let mut sink = RecordingSink::default();
+
+        #[cfg(windows)]
+        let command = ProcessCommand {
+            executable: SharedString::from("cmd"),
+            arguments: vec![
+                SharedString::from("/C"),
+                SharedString::from("(echo hello)&(echo warn 1>&2)"),
+            ],
+            working_directory: None,
+            environment: Vec::new(),
+        };
+
+        #[cfg(not(windows))]
+        let command = ProcessCommand {
+            executable: SharedString::from("sh"),
+            arguments: vec![
+                SharedString::from("-c"),
+                SharedString::from("printf 'hello\\n'; printf 'warn\\n' 1>&2"),
+            ],
+            working_directory: None,
+            environment: Vec::new(),
+        };
+
+        let result = pal.run_process(&command, &mut sink).unwrap();
+
+        assert_eq!(result.exit_code, Some(0));
+        assert!(
+            sink.events
+                .iter()
+                .any(|event| matches!(event, ProcessEvent::Started(_)))
+        );
+        assert!(sink.events.iter().any(|event| {
+            matches!(event, ProcessEvent::Output(output) if String::from_utf8_lossy(&output.bytes).contains("hello"))
+        }));
+        assert!(sink.events.iter().any(|event| {
+            matches!(event, ProcessEvent::Output(output) if String::from_utf8_lossy(&output.bytes).contains("warn"))
+        }));
+        assert!(
+            sink.events
+                .iter()
+                .any(|event| matches!(event, ProcessEvent::Exited(_)))
+        );
     }
 }

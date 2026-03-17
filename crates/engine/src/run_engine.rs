@@ -1,4 +1,6 @@
 use crate::planned_run::PlannedRun;
+use crate::run_artifact_writer::RunArtifactWriter;
+use crate::run_artifact_writer::TaskArtifactRecord;
 use crate::run_execution_result::RunExecutionResult;
 use crate::task_output_framer::TaskOutputFramer;
 use nao_base::err;
@@ -74,24 +76,109 @@ impl RunEngine {
         } else {
             recipe_directory
         };
-        let mut framer = TaskOutputFramer::new();
+        let run_started_at = self.pal.now();
+        let run_started_system_time = self.pal.system_time();
+        let writer = RunArtifactWriter::new(
+            self.pal.clone(),
+            &recipe_directory,
+            task_names,
+            run_started_at,
+            run_started_system_time,
+        );
+        writer.write_plan(&plan)?;
+        let mut output = SharedString::empty();
+        let mut task_records = Vec::new();
+        let mut failure_message = None;
+        let mut failed = false;
 
         for task in &plan.tasks {
+            if failed {
+                task_records.push(TaskArtifactRecord {
+                    name: task.name.0.clone(),
+                    status: SharedString::from("skipped"),
+                    result: SharedString::from("skipped"),
+                    started_at: None,
+                    finished_at: Some(self.pal.now()),
+                    exit_code: None,
+                    log_lines: Vec::new(),
+                });
+                continue;
+            }
+
+            let mut framer = TaskOutputFramer::new();
             framer.push_task_heading(task.name.as_str());
             let command = build_process_command(&recipe_directory, task)?;
-            let result = self.pal.run_process(&command, &mut framer)?;
+            match self.pal.run_process(&command, &mut framer) {
+                Ok(result) => {
+                    let (task_output, log_lines) = framer.into_parts();
+                    if !output.is_empty() {
+                        output.push_str("\n");
+                    }
+                    output.push_str(task_output.as_str());
 
-            if result.exit_code.unwrap_or(1) != 0 {
-                return Err(err!(
-                    "task `{}` failed with exit code {}",
-                    task.name.as_str(),
-                    result.exit_code.unwrap_or(-1)
-                ));
+                    let task_failed = result.exit_code.unwrap_or(1) != 0;
+                    if task_failed {
+                        failed = true;
+                        failure_message = Some(format!(
+                            "task `{}` failed with exit code {}",
+                            task.name.as_str(),
+                            result.exit_code.unwrap_or(-1)
+                        ));
+                    }
+
+                    task_records.push(TaskArtifactRecord {
+                        name: task.name.0.clone(),
+                        status: SharedString::from(if task_failed {
+                            "failed"
+                        } else {
+                            "completed"
+                        }),
+                        result: SharedString::from(if task_failed { "failed" } else { "success" }),
+                        started_at: Some(result.started_at),
+                        finished_at: Some(result.finished_at),
+                        exit_code: result.exit_code,
+                        log_lines,
+                    });
+                }
+                Err(error) => {
+                    let (task_output, log_lines) = framer.into_parts();
+                    if !output.is_empty() {
+                        output.push_str("\n");
+                    }
+                    output.push_str(task_output.as_str());
+
+                    failed = true;
+                    failure_message = Some(error.to_test_string());
+                    task_records.push(TaskArtifactRecord {
+                        name: task.name.0.clone(),
+                        status: SharedString::from("failed"),
+                        result: SharedString::from("failed"),
+                        started_at: None,
+                        finished_at: Some(self.pal.now()),
+                        exit_code: None,
+                        log_lines,
+                    });
+                }
             }
         }
 
+        let run_finished_at = self.pal.now();
+        let overall_result = if failed { "failed" } else { "completed" };
+        writer.write_completion(
+            &plan,
+            &task_records,
+            run_finished_at,
+            overall_result,
+            failure_message.as_deref(),
+        )?;
+
+        if let Some(failure_message) = failure_message {
+            return Err(err!("{failure_message}"));
+        }
+
         Ok(RunExecutionResult {
-            output: framer.into_output(),
+            output,
+            run_directory: writer.run_directory(),
         })
     }
 
@@ -188,6 +275,7 @@ mod tests {
     use nao_pal::process_output_stream::ProcessOutputStream;
     use nao_pal::process_result::ProcessResult;
     use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
+    use std::time::{Duration, SystemTime};
 
     fn test_engine() -> RunEngine {
         let pal = PalMock::new();
@@ -209,7 +297,7 @@ mod tests {
         RunEngine::new(PalHandle::new(pal))
     }
 
-    fn set_script_process(pal: &PalMock, script: &str, chunks: &[&[u8]]) {
+    fn set_script_process(pal: &PalMock, script: &str, chunks: &[&[u8]], exit_code: i32) {
         let mut events = Vec::new();
         for (index, chunk) in chunks.iter().enumerate() {
             events.push(ProcessEvent::Output(ProcessOutputEvent {
@@ -228,7 +316,7 @@ mod tests {
         }));
         events.push(ProcessEvent::Exited(ProcessExitedEvent {
             timestamp: Timestamp::new((chunks.len() + 3) as u128),
-            exit_code: Some(0),
+            exit_code: Some(exit_code),
         }));
 
         pal.set_process_execution(
@@ -242,7 +330,7 @@ mod tests {
             ProcessResult {
                 started_at: Timestamp::new(0),
                 finished_at: Timestamp::new((chunks.len() + 3) as u128),
-                exit_code: Some(0),
+                exit_code: Some(exit_code),
             },
         );
     }
@@ -310,8 +398,8 @@ planned=build,test"#
             }
             "#,
         );
-        set_script_process(&pal, "./scripts/build.sh", &[b"building\n"]);
-        set_script_process(&pal, "./scripts/test.sh", &[b"testing"]);
+        set_script_process(&pal, "./scripts/build.sh", &[b"building\n"], 0);
+        set_script_process(&pal, "./scripts/test.sh", &[b"testing"], 0);
         let engine = RunEngine::new(PalHandle::new(pal.clone()));
 
         let output = engine
@@ -331,9 +419,130 @@ Running task `test`
         .assert_eq(output.output.as_str());
         pal.verify_effects(expect![
             r#"READ FILE: nao.kdl
+CREATE DIRECTORY: .nao/runs
+CREATE DIRECTORY: .nao/runs/1970-01-01T00-00-00Z-test
+WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-plan.json -> {
+  "requested_tasks": [
+    "test"
+  ],
+  "tasks": [
+    {
+      "artifacts": [],
+      "dependencies": [],
+      "description": null,
+      "environment": [],
+      "name": "build",
+      "run": {
+        "kind": "script",
+        "path": "./scripts/build.sh"
+      }
+    },
+    {
+      "artifacts": [],
+      "dependencies": [
+        "build"
+      ],
+      "description": null,
+      "environment": [],
+      "name": "test",
+      "run": {
+        "kind": "script",
+        "path": "./scripts/test.sh"
+      }
+    }
+  ]
+}
 RUN PROCESS: ./scripts/build.sh 
 RUN PROCESS: ./scripts/test.sh 
+WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/build.log -> [1970-01-01T00:00:00Z] stdout: building
+
+WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/test.log -> [1970-01-01T00:00:00Z] stdout: testing
+
+WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"requested_tasks":["test"],"timestamp":"1970-01-01T00:00:00Z","type":"run_started"}
+{"task":"build","timestamp":"1970-01-01T00:00:00Z","type":"task_started"}
+{"exit_code":0,"result":"success","status":"completed","task":"build","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
+{"task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_started"}
+{"exit_code":0,"result":"success","status":"completed","task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
+{"result":"completed","timestamp":"1970-01-01T00:00:00Z","type":"run_finished"}
+
+WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-summary.json -> {
+  "failure_message": null,
+  "result": "completed",
+  "run": {
+    "duration_nanos": "0",
+    "finished_at": "1970-01-01T00:00:00Z",
+    "requested_tasks": [
+      "test"
+    ],
+    "started_at": "1970-01-01T00:00:00Z"
+  },
+  "tasks": [
+    {
+      "duration_nanos": "4",
+      "exit_code": 0,
+      "finished_at": "1970-01-01T00:00:00Z",
+      "log_file": "build.log",
+      "name": "build",
+      "result": "success",
+      "started_at": "1970-01-01T00:00:00Z",
+      "status": "completed"
+    },
+    {
+      "duration_nanos": "4",
+      "exit_code": 0,
+      "finished_at": "1970-01-01T00:00:00Z",
+      "log_file": "test.log",
+      "name": "test",
+      "result": "success",
+      "started_at": "1970-01-01T00:00:00Z",
+      "status": "completed"
+    }
+  ]
+}
 "#
         ]);
+    }
+
+    #[test]
+    fn writes_failed_run_summary_and_skipped_tasks() {
+        let pal = PalMock::new();
+        pal.set_current_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "build" {
+                run script="./scripts/build.sh"
+              }
+
+              task "test" {
+                depends-on "build"
+                run script="./scripts/test.sh"
+              }
+
+              task "package" {
+                depends-on "test"
+                run script="./scripts/package.sh"
+              }
+            }
+            "#,
+        );
+        set_script_process(&pal, "./scripts/build.sh", &[b"building\n"], 0);
+        set_script_process(&pal, "./scripts/test.sh", &[b"boom\n"], 1);
+        let engine = RunEngine::new(PalHandle::new(pal.clone()));
+
+        let error = engine
+            .execute_run(&FilePath::from("nao.kdl"), &["package".to_owned()])
+            .unwrap_err();
+
+        let rendered_error = error.to_test_string();
+        assert!(rendered_error.contains("task `test` failed with exit code 1"));
+
+        let summary = pal
+            .read_file_string(".nao/runs/1970-01-01T00-00-10Z-package/nao-summary.json")
+            .unwrap();
+        assert!(summary.contains("\"result\": \"failed\""));
+        assert!(summary.contains("\"name\": \"package\""));
+        assert!(summary.contains("\"status\": \"skipped\""));
     }
 }

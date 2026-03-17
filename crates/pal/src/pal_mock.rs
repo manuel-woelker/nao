@@ -10,20 +10,21 @@ use nao_base::result::{NaoResult, OptionExt};
 use nao_base::timestamp::Timestamp;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::io::{Cursor, Write};
+use std::io::Cursor;
 use std::sync::Arc;
+use std::time::SystemTime;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PalMock {
     inner: Arc<RwLock<PalMockInner>>,
 }
 
-#[derive(Default)]
 struct PalMockInner {
     effects_string: String,
     file_map: HashMap<FilePath, Vec<u8>>,
     process_executions: HashMap<ProcessCommand, (Vec<ProcessEvent>, ProcessResult)>,
     current_timestamp: Timestamp,
+    current_system_time: SystemTime,
 }
 
 impl PalMock {
@@ -34,6 +35,7 @@ impl PalMock {
                 file_map: HashMap::new(),
                 process_executions: HashMap::new(),
                 current_timestamp: Timestamp::new(0),
+                current_system_time: SystemTime::UNIX_EPOCH,
             })),
         }
     }
@@ -75,6 +77,33 @@ impl PalMock {
             .write()
             .process_executions
             .insert(command, (events, result));
+    }
+
+    pub fn set_current_timestamp(&self, timestamp: Timestamp) {
+        self.inner.write().current_timestamp = timestamp;
+    }
+
+    pub fn set_current_system_time(&self, system_time: SystemTime) {
+        self.inner.write().current_system_time = system_time;
+    }
+
+    pub fn read_file_bytes(&self, path: &str) -> Option<Vec<u8>> {
+        self.inner
+            .read()
+            .file_map
+            .get(&FilePath::from(path))
+            .cloned()
+    }
+
+    pub fn read_file_string(&self, path: &str) -> Option<String> {
+        self.read_file_bytes(path)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+impl Default for PalMock {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -118,6 +147,24 @@ impl Pal for PalMock {
         Ok(())
     }
 
+    fn create_directory_all(&self, path: &FilePath) -> NaoResult<()> {
+        self.log_effect(format!("CREATE DIRECTORY: {path}"));
+        Ok(())
+    }
+
+    fn write_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()> {
+        self.log_effect(format!(
+            "WRITE FILE: {} -> {}",
+            path,
+            String::from_utf8_lossy(content)
+        ));
+        self.inner
+            .write()
+            .file_map
+            .insert(path.clone(), content.to_vec());
+        Ok(())
+    }
+
     fn run_process(
         &self,
         command: &ProcessCommand,
@@ -156,51 +203,14 @@ impl Pal for PalMock {
     fn now(&self) -> Timestamp {
         self.inner.read().current_timestamp
     }
+
+    fn system_time(&self) -> SystemTime {
+        self.inner.read().current_system_time
+    }
 }
 
 impl Debug for PalMock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PalMock").finish()
-    }
-}
-
-pub struct MockFile {
-    path: FilePath,
-    data: Vec<u8>,
-    pal_mock: PalMock,
-}
-
-impl MockFile {
-    pub fn new(path: &FilePath, pal_mock: PalMock) -> Self {
-        Self {
-            path: path.clone(),
-            data: vec![],
-            pal_mock,
-        }
-    }
-}
-
-impl Write for MockFile {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.data.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Drop for MockFile {
-    fn drop(&mut self) {
-        self.pal_mock.log_effect(format!(
-            "WRITE FILE: {} -> {}",
-            self.path,
-            String::from_utf8_lossy(&self.data)
-        ));
-        self.pal_mock
-            .inner
-            .write()
-            .file_map
-            .insert(self.path.clone(), self.data.clone());
     }
 }

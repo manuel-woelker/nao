@@ -43,7 +43,7 @@ Each run directory should contain these files:
 
 - `nao-plan.json`
 - `nao-events.jsonl`
-- one log file per task
+- one `<sanitized-task-name>.log` file per task
 - `nao-summary.json` once the run completes
 
 Together, these files should make it possible to reconstruct what `nao` intended to run, what happened during the run, and what the final result was.
@@ -57,6 +57,7 @@ At a minimum, it should include:
 - the requested top-level task or tasks
 - the full set of tasks selected for the run
 - the dependency relationships between those tasks
+- the relevant execution details for each task, such as execution kind and command or script path
 
 The file should represent the planned graph, not the observed runtime outcome.
 Its purpose is to show what `nao` decided to execute and why individual tasks were eligible to run.
@@ -70,10 +71,11 @@ Events should include the significant lifecycle transitions of the run, such as:
 
 - run start
 - task start
-- task end
-- exit code recording
+- task finish
+- task skip
 - run end
 
+Task finish events should record the final status and exit code when an exit code exists.
 Additional event types may be added as needed, but the event stream should remain append-only and ordered so it can be consumed incrementally while a run is in progress.
 
 # How should per-task log files work?
@@ -82,10 +84,12 @@ Each task should have its own log file containing the combined output written by
 If a task never starts or produces no output, the implementation may still create an empty log file so the file set remains predictable.
 
 Every log line should be prefixed with a timestamp in ISO-8601 format so readers can understand when output was produced.
+When stdout and stderr are combined into one task log, each rendered line should identify which stream produced it.
 Keeping one log file per task preserves readability during parallel task execution and allows users to inspect task output independently after the run.
 
 The task log filename should make the corresponding task easy to identify.
 Task log filenames must also be filesystem-safe and must not contain `:`.
+Using a sanitized task name with a `.log` suffix is the intended format.
 
 # What should `nao-summary.json` contain?
 
@@ -95,6 +99,7 @@ It should summarize the final outcome of the run and the final state of each tas
 At a minimum, it should include:
 
 - the overall run result
+- an optional failure message when the run fails for an engine or process-execution reason
 - overall run timing information
 - one entry per task
 
@@ -102,6 +107,8 @@ Each task entry should include:
 
 - the task result
 - the task status
+- the task log filename
+- the exit code when one exists
 - timing information
 
 Task status values should include:
@@ -109,5 +116,7 @@ Task status values should include:
 - `completed`
 - `failed`
 - `skipped`
+
+Task result values should distinguish successful completion from failure or skip.
 
 This file is the stable end-of-run summary that users and other tools should read when they need the final outcome rather than the full event stream.

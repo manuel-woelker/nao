@@ -8,6 +8,7 @@ use nao_base::timestamp::Timestamp;
 use std::fmt::Debug;
 use std::io::{Read, Seek};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 // Define a new trait combining Read + Seek
 pub trait ReadSeek: Read + Seek {}
@@ -48,6 +49,12 @@ pub trait Pal: Debug + Sync + Send + 'static {
         callback: FileChangeCallback,
     ) -> NaoResult<()>;
 
+    /// Create a directory and all missing parent directories.
+    fn create_directory_all(&self, path: &FilePath) -> NaoResult<()>;
+
+    /// Write a full file, replacing any previous contents.
+    fn write_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()>;
+
     /// Execute a child process and synchronously forward process events to the sink.
     fn run_process(
         &self,
@@ -56,6 +63,9 @@ pub trait Pal: Debug + Sync + Send + 'static {
     ) -> NaoResult<ProcessResult>;
 
     fn now(&self) -> Timestamp;
+
+    /// Returns the current wall clock time.
+    fn system_time(&self) -> SystemTime;
 }
 
 #[derive(Debug, Clone)]

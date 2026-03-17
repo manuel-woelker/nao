@@ -13,6 +13,8 @@ path = "src/lib.rs"
 nao-base = { path = "../base" }
 nao-pal = { path = "../pal" }
 nao-recipe = { path = "../recipe" }
+serde_json = "1.0.145"
+time = { version = "0.3.41", features = ["formatting"] }
 
 [dev-dependencies]
 expect-test = { workspace = true }

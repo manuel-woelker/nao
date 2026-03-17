@@ -6,7 +6,7 @@ This plan describes how to add async process execution while keeping the rest of
 
 # What is the current status?
 
-This plan is active.
+This plan is complete.
 
 The repository currently has:
 
@@ -162,7 +162,7 @@ The recommended implementation order is:
 - [x] Add focused process execution domain files to `crates/pal/src/`.
 - [x] Extend `crates/pal/src/pal.rs` with a synchronous process execution API.
 - [x] Define a sink trait or callback shape for PAL-to-engine process events.
-- [ ] Document in code why Tokio remains a PAL-only detail if that is not obvious from the public API.
+- [x] Document in code why Tokio remains a PAL-only detail if that is not obvious from the public API.
 - [x] Add `PalMock` support for scripted process execution events and results.
 - [x] Add Tokio dependencies to `crates/pal/Cargo.toml`.
 - [x] Add one shared Tokio runtime to `PalReal` rather than constructing a runtime per process execution.
@@ -173,9 +173,9 @@ The recommended implementation order is:
 - [x] Add an engine-side executor component in `crates/engine/src/`.
 - [x] Add an engine-side output framer that converts chunk events into timestamp-prefixed log lines.
 - [x] Add engine tests for event handling, task completion, and failure propagation.
-- [ ] Add PAL tests for process event sequencing in both real and mock implementations where practical.
-- [ ] Add run-log and event persistence work that maps execution events into `.nao/runs`.
-- [ ] Update [`docs/NAO-SPEC.md`](../../NAO-SPEC.md) if implementation details refine the file format.
+- [x] Add PAL tests for process event sequencing in both real and mock implementations where practical.
+- [x] Add run-log and event persistence work that maps execution events into `.nao/runs`.
+- [x] Update [`docs/NAO-SPEC.md`](../../NAO-SPEC.md) if implementation details refine the file format.
 - [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
