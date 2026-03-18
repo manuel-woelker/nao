@@ -35,7 +35,7 @@ impl RunEngine {
     /// Plans a run for the requested top-level task names.
     pub fn plan_run(&self, recipe_path: &FilePath, task_names: &[String]) -> NaoResult<PlannedRun> {
         if task_names.is_empty() {
-            return Err(err!("usage: nao [--list] [task-name...] [recipe-file]"));
+            return Err(err!("usage: nao [--list] [--config <path>] [task-name...]"));
         }
 
         let recipe = load_recipe_with_pal(&*self.pal, recipe_path)?;

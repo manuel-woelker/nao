@@ -50,9 +50,17 @@ pub fn format_cli_error(headline: &str, error: &NaoError) -> String {
     }
 
     if !causes.is_empty() {
+        let simple_causes: Vec<_> = causes
+            .iter()
+            .filter(|(cause, _)| !cause.contains('\n'))
+            .collect();
+        if simple_causes.is_empty() {
+            return rendered;
+        }
+
         rendered.push('\n');
         rendered.push_str("\u{1b}[1;33m━━ cause chain\u{1b}[0m\n");
-        for (cause, location) in &causes {
+        for (cause, location) in simple_causes {
             let _ = writeln!(&mut rendered, "  • {}", cause);
             let _ = writeln!(
                 &mut rendered,
@@ -82,17 +90,34 @@ mod tests {
         expect!([r#"
             ━━ verification failed
             × error failed to verify
-              at crates/base/src/cli.rs:79:21
+              at crates/base/src/cli.rs:87:21
             caused by: missing reference output
-                 at crates/base/src/cli.rs:80:26
+                 at crates/base/src/cli.rs:88:26
 
             ━━ cause chain
               • missing reference output
-                at crates/base/src/cli.rs:80:26
+                at crates/base/src/cli.rs:88:26
         "#])
         .assert_eq(&crate::unansi(&format_cli_error(
             "verification failed",
             &error,
         )));
+    }
+
+    #[test]
+    fn format_cli_error_skips_cause_chain_for_multiline_cause() {
+        let error = NaoError::message("failed to load recipe")
+            .with_source(NaoError::message("line one\nline two"));
+
+        expect!([r#"
+            ━━ recipe failed
+            × error failed to load recipe
+              at crates/base/src/cli.rs:109:21
+            caused by:
+               line one
+               line two
+                 at crates/base/src/cli.rs:110:26
+        "#])
+        .assert_eq(&crate::unansi(&format_cli_error("recipe failed", &error)));
     }
 }

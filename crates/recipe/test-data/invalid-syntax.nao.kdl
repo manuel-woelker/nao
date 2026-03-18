@@ -1,0 +1,3 @@
+recipe "broken" {
+  task "build" {
+    run shell="cargo build"

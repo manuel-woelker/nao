@@ -11,8 +11,8 @@ use std::process::ExitCode;
 xflags::xflags! {
     cmd nao {
         optional --list
+        optional --config config: PathBuf
         repeated task_name: String
-        optional recipe_file: PathBuf
     }
 }
 
@@ -31,12 +31,39 @@ fn main() -> ExitCode {
 
 fn run() -> NaoResult<ExitCode> {
     let flags = Nao::from_env().map_err(|error| err!("{error}"))?;
-    let recipe_path = flags
-        .recipe_file
-        .unwrap_or_else(|| PathBuf::from("nao.kdl"));
+    let recipe_path = flags.config.unwrap_or_else(|| PathBuf::from("nao.kdl"));
     let runner = Runner::new(PalReal::new_handle());
     let output = runner.execute(&FilePath::new(&recipe_path), flags.list, &flags.task_name)?;
 
     print!("{}", output.output);
     Ok(output.exit_code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Nao;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_config_flag_and_tasks() {
+        let flags = Nao::from_vec(vec![
+            OsString::from("--config"),
+            OsString::from("configs/custom.kdl"),
+            OsString::from("build"),
+            OsString::from("test"),
+        ])
+        .unwrap();
+
+        assert_eq!(flags.config, Some(PathBuf::from("configs/custom.kdl")));
+        assert_eq!(flags.task_name, vec!["build".to_owned(), "test".to_owned()]);
+    }
+
+    #[test]
+    fn defaults_to_no_config_flag() {
+        let flags = Nao::from_vec(vec![OsString::from("--list")]).unwrap();
+
+        assert_eq!(flags.config, None);
+        assert!(flags.list);
+    }
 }

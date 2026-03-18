@@ -6,6 +6,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecipeError {
     message: SharedString,
+    rendered_location: Option<SharedString>,
 }
 
 impl RecipeError {
@@ -13,6 +14,18 @@ impl RecipeError {
     pub fn new(message: impl Into<SharedString>) -> Self {
         Self {
             message: message.into(),
+            rendered_location: None,
+        }
+    }
+
+    /// Creates a new recipe error with an attached source-location rendering.
+    pub fn with_rendered_location(
+        message: impl Into<SharedString>,
+        rendered_location: impl Into<SharedString>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            rendered_location: Some(rendered_location.into()),
         }
     }
 
@@ -24,7 +37,14 @@ impl RecipeError {
 
 impl Display for RecipeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.message())
+        f.write_str(self.message())?;
+
+        if let Some(rendered_location) = &self.rendered_location {
+            f.write_str("\n")?;
+            f.write_str(rendered_location.as_str())?;
+        }
+
+        Ok(())
     }
 }
 

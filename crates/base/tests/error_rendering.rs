@@ -62,6 +62,22 @@ fn std_source_error_formats_cause_and_locations() {
 }
 
 #[test]
+fn multiline_cause_renders_as_indented_block() {
+    let error = NaoError::message("failed to load recipe")
+        .with_source(NaoError::message("line one\nline two"));
+
+    expect!([r#"
+        × error failed to load recipe
+          at crates/base/tests/error_rendering.rs:66:17
+        caused by:
+           line one
+           line two
+             at crates/base/tests/error_rendering.rs:67:22
+    "#])
+    .assert_eq(&error.to_test_string());
+}
+
+#[test]
 fn span_trace_renders_as_structured_frames() {
     init_logging();
     let span = info_span!("error_test_span");
@@ -71,10 +87,10 @@ fn span_trace_renders_as_structured_frames() {
 
     expect!([r#"
         × error failed inside span
-          at crates/base/tests/error_rendering.rs:70:17
+          at crates/base/tests/error_rendering.rs:86:17
           span trace:
             0: error_rendering::error_test_span
-               at crates/base/tests/error_rendering.rs:67
+               at crates/base/tests/error_rendering.rs:83
     "#])
     .assert_eq(&error.to_test_string());
 }

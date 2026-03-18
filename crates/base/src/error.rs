@@ -140,12 +140,11 @@ impl NaoError {
         }
 
         if let Some(source) = self.source.as_deref() {
-            writeln!(
+            write_rendered_cause(
                 write,
-                "{}{} {}",
                 prefix,
-                style("33", "caused by:"),
-                source.kind
+                &style("33", "caused by:"),
+                &source.kind.to_string(),
             )?;
             source.write_child_details(write, &format!("{prefix}   "))?;
         }
@@ -176,18 +175,35 @@ impl NaoError {
         }
 
         if let Some(source) = self.source.as_deref() {
-            writeln!(
+            write_rendered_cause(
                 write,
-                "{}{} {}",
                 prefix,
-                style("33", "caused by:"),
-                source.kind
+                &style("33", "caused by:"),
+                &source.kind.to_string(),
             )?;
             source.write_child_details(write, &format!("{prefix}   "))?;
         }
 
         Ok(())
     }
+}
+
+fn write_rendered_cause(
+    write: &mut dyn std::fmt::Write,
+    prefix: &str,
+    label: &str,
+    rendered: &str,
+) -> std::fmt::Result {
+    if rendered.contains('\n') {
+        writeln!(write, "{prefix}{label}")?;
+        for line in rendered.lines() {
+            writeln!(write, "{prefix}   {line}")?;
+        }
+    } else {
+        writeln!(write, "{prefix}{label} {rendered}")?;
+    }
+
+    Ok(())
 }
 
 fn write_span_trace(

@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 kdl = { workspace = true }
+miette = { version = "7.6.0", features = ["fancy"] }
 nao-base = { path = "../base" }
 nao-pal = { path = "../pal" }
 
