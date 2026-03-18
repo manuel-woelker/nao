@@ -134,17 +134,32 @@ fn render_running_line(line_body: &str) -> String {
 
 fn render_failure_summary(goal_tasks: &[SharedString], task_failure: &TaskFailure) -> String {
     let mut output = String::new();
+    let header_text = format!(
+        "{} output: ({} lines omitted)",
+        task_failure.task_name.as_str(),
+        task_failure.omitted_output_line_count,
+    );
+    let side_width = 9usize;
+    let side_line = "─".repeat(side_width);
     let _ = writeln!(
         &mut output,
-        "{} output: ({} lines omitted)",
-        style_bold_white(task_failure.task_name.as_str()),
-        task_failure.omitted_output_line_count,
+        "╭{} {} {}╮",
+        side_line,
+        style_bold_white(&header_text),
+        side_line,
     );
 
     for line in &task_failure.output_tail_lines {
         let _ = writeln!(&mut output, "{}", line.as_str());
     }
 
+    let _ = writeln!(
+        &mut output,
+        "╰{} {} {}╯",
+        side_line,
+        style_bold_white(&header_text),
+        side_line,
+    );
     output.push('\n');
 
     let _ = writeln!(
@@ -417,8 +432,9 @@ mod tests {
             .unwrap();
 
         expect![[r#"
-            test output: (0 lines omitted)
+            ╭───────── test output: (0 lines omitted) ─────────╮
             boom
+            ╰───────── test output: (0 lines omitted) ─────────╯
 
             ❌ test failed because test failed with exit code 1 in 4ns after 1 task completed successfully
         "#]]
@@ -479,9 +495,10 @@ mod tests {
         );
 
         expect![[r#"
-            fail3 output: (0 lines omitted)
+            ╭───────── fail3 output: (0 lines omitted) ─────────╮
             line one
             line two
+            ╰───────── fail3 output: (0 lines omitted) ─────────╯
 
             ❌ fail5 failed because fail3 failed with exit code 1 in 2.5ms after 2 tasks completed successfully
         "#]]
@@ -506,9 +523,10 @@ mod tests {
         );
 
         expect![[r#"
-            fail3 output: (23 lines omitted)
+            ╭───────── fail3 output: (23 lines omitted) ─────────╮
             kept line 1
             kept line 2
+            ╰───────── fail3 output: (23 lines omitted) ─────────╯
 
             ❌ fail5 failed because fail3 failed with exit code 1 in 2.5ms after 2 tasks completed successfully
         "#]]

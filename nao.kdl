@@ -47,4 +47,8 @@ recipe "default" {
     depends-on "fail4"
     run shell="printf '5\n'"
   }
+
+  task "shortfail" description="Print 20 lines and fail" {
+    run shell="for i in $(seq 1 20); do printf 'shortfail line %02d: this task fails after a shorter output block\n' \"$i\"; done; exit 1"
+  }
 }
