@@ -12,6 +12,7 @@ use nao_base::shared_string::SharedString;
 use nao_pal::pal::PalHandle;
 use nao_pal::process_command::ProcessCommand;
 use nao_pal::process_environment_variable::ProcessEnvironmentVariable;
+use nao_pal::process_output_stream::ProcessOutputStream;
 use nao_recipe::{RunSpec, Task, TaskName, load_recipe_with_pal};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -144,6 +145,8 @@ impl RunEngine {
                                 .as_nanos()
                                 .saturating_sub(run_started_at.as_nanos()),
                             successful_task_count,
+                            omitted_output_line_count: task_output_omitted_line_count(&log_lines),
+                            output_tail_lines: task_output_tail_lines(&log_lines),
                         };
                         failure_message = Some(render_task_failure_message(&task_failure));
                         run_status = RunStatus::Failed(task_failure);
@@ -262,6 +265,22 @@ fn render_task_failure_message(task_failure: &TaskFailure) -> String {
         pretty_duration(task_failure.elapsed_nanos),
         render_completed_task_count(task_failure.successful_task_count),
     )
+}
+
+fn task_output_omitted_line_count(
+    log_lines: &[(nao_base::timestamp::Timestamp, ProcessOutputStream, String)],
+) -> usize {
+    log_lines.len().saturating_sub(100)
+}
+
+fn task_output_tail_lines(
+    log_lines: &[(nao_base::timestamp::Timestamp, ProcessOutputStream, String)],
+) -> Vec<SharedString> {
+    log_lines
+        .iter()
+        .skip(log_lines.len().saturating_sub(100))
+        .map(|(_, _, line)| SharedString::from(line.as_str()))
+        .collect()
 }
 
 fn render_task_execution_error_message(
@@ -635,6 +654,8 @@ WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-summary.json -> {
                 exit_code: 1,
                 elapsed_nanos: 4,
                 successful_task_count: 1,
+                omitted_output_line_count: 0,
+                output_tail_lines: vec![SharedString::from("boom")],
             })
         );
 

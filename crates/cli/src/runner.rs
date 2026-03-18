@@ -133,8 +133,23 @@ fn render_running_line(line_body: &str) -> String {
 }
 
 fn render_failure_summary(goal_tasks: &[SharedString], task_failure: &TaskFailure) -> String {
-    format!(
-        "\u{1b}[1;31m❌\u{1b}[0m {} failed because {} failed with exit code {} in {} after {} completed successfully\n",
+    let mut output = String::new();
+    let _ = writeln!(
+        &mut output,
+        "{} output: ({} lines omitted)",
+        style_bold_white(task_failure.task_name.as_str()),
+        task_failure.omitted_output_line_count,
+    );
+
+    for line in &task_failure.output_tail_lines {
+        let _ = writeln!(&mut output, "{}", line.as_str());
+    }
+
+    output.push('\n');
+
+    let _ = writeln!(
+        &mut output,
+        "\u{1b}[1;31m❌\u{1b}[0m {} failed because {} failed with exit code {} in {} after {} completed successfully",
         style_bold_white(&join_goal_tasks(goal_tasks)),
         style_bold_white(task_failure.task_name.as_str()),
         style_bold_white(&task_failure.exit_code.to_string()),
@@ -142,7 +157,9 @@ fn render_failure_summary(goal_tasks: &[SharedString], task_failure: &TaskFailur
         style_bold_white(&render_completed_task_count(
             task_failure.successful_task_count
         )),
-    )
+    );
+
+    output
 }
 
 fn render_running_line_body(goal_tasks: &[TaskName], total_task_count: usize) -> String {
@@ -400,6 +417,9 @@ mod tests {
             .unwrap();
 
         expect![[r#"
+            test output: (0 lines omitted)
+            boom
+
             ❌ test failed because test failed with exit code 1 in 4ns after 1 task completed successfully
         "#]]
         .assert_eq(&nao_base::unansi(&output.output));
@@ -450,10 +470,46 @@ mod tests {
                 exit_code: 1,
                 elapsed_nanos: 2_500_000,
                 successful_task_count: 2,
+                omitted_output_line_count: 0,
+                output_tail_lines: vec![
+                    SharedString::from("line one"),
+                    SharedString::from("line two"),
+                ],
             },
         );
 
         expect![[r#"
+            fail3 output: (0 lines omitted)
+            line one
+            line two
+
+            ❌ fail5 failed because fail3 failed with exit code 1 in 2.5ms after 2 tasks completed successfully
+        "#]]
+        .assert_eq(&nao_base::unansi(&rendered));
+    }
+
+    #[test]
+    fn renders_failure_summary_with_omitted_line_notice() {
+        let rendered = render_failure_summary(
+            &[SharedString::from("fail5")],
+            &TaskFailure {
+                task_name: SharedString::from("fail3"),
+                exit_code: 1,
+                elapsed_nanos: 2_500_000,
+                successful_task_count: 2,
+                omitted_output_line_count: 23,
+                output_tail_lines: vec![
+                    SharedString::from("kept line 1"),
+                    SharedString::from("kept line 2"),
+                ],
+            },
+        );
+
+        expect![[r#"
+            fail3 output: (23 lines omitted)
+            kept line 1
+            kept line 2
+
             ❌ fail5 failed because fail3 failed with exit code 1 in 2.5ms after 2 tasks completed successfully
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));

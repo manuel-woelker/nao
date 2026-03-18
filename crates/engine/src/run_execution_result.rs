@@ -21,6 +21,10 @@ pub struct TaskFailure {
     pub elapsed_nanos: u128,
     /// Number of tasks that completed successfully before the failure.
     pub successful_task_count: usize,
+    /// Number of earlier task output lines omitted from the rendered tail.
+    pub omitted_output_line_count: usize,
+    /// Last task output lines without timestamps.
+    pub output_tail_lines: Vec<SharedString>,
 }
 
 /// Describes the rendered result of executing a planned run.

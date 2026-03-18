@@ -35,7 +35,7 @@ recipe "default" {
 
   task "fail3" description="Print 3 and fail after fail2" {
     depends-on "fail2"
-    run shell="printf '3\n'; for i in $(seq 1 20); do printf 'fail3 line %02d: this task is intentionally producing a wall of text before failing\n' \"$i\"; done; printf 'fail3 is about to fail\n'; exit 1"
+    run shell="printf '3\n'; for i in $(seq 1 200); do printf 'fail3 line %03d: this task is intentionally producing a wall of text before failing\n' \"$i\"; done; printf 'fail3 is about to fail\n'; exit 1"
   }
 
   task "fail4" description="Print 4 after fail3" {
