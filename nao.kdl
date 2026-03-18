@@ -1,20 +1,41 @@
 recipe "default" {
   task "build" description="Build the workspace" {
-    run shell="cargo build --workspace --all-targets --all-features"
+    run shell="""
+      cargo build \
+        --workspace \
+        --all-targets \
+        --all-features
+    """
   }
 
   task "fmt" description="Check code formatting" {
-    run shell="cargo fmt --all --check"
+    run shell="""
+      cargo fmt \
+        --all \
+        --check
+    """
   }
 
   task "clippy" description="Run clippy across the workspace" {
     depends-on "build"
-    run shell="cargo clippy --workspace --all-targets --all-features -- -D warnings"
+    run shell="""
+      cargo clippy \
+        --workspace \
+        --all-targets \
+        --all-features \
+        -- \
+        -D warnings
+    """
   }
 
   task "test" description="Run the test suite" {
     depends-on "build"
-    run shell="cargo nextest run --workspace --all-targets --all-features"
+    run shell="""
+      cargo nextest run \
+        --workspace \
+        --all-targets \
+        --all-features
+    """
   }
 
   task "check-code" description="Run the full repository verification script" {
@@ -25,30 +46,50 @@ recipe "default" {
   }
 
   task "fail1" description="Print 1" {
-    run shell="printf '1\n'"
+    run shell="""
+      printf '1\n'
+    """
   }
 
   task "fail2" description="Print 2 after fail1" {
     depends-on "fail1"
-    run shell="printf '2\n'"
+    run shell="""
+      printf '2\n'
+    """
   }
 
   task "fail3" description="Print 3 and fail after fail2" {
     depends-on "fail2"
-    run shell="printf '3\n'; for i in $(seq 1 200); do printf 'fail3 line %03d: this task is intentionally producing a wall of text before failing\n' \"$i\"; done; printf 'fail3 is about to fail\n'; exit 1"
+    run shell="""
+      printf '3\n'
+      for i in $(seq 1 200); do
+        printf 'fail3 line %03d: this task is intentionally producing a wall of text before failing\n' "$i"
+      done
+      printf 'fail3 is about to fail\n'
+      exit 1
+    """
   }
 
   task "fail4" description="Print 4 after fail3" {
     depends-on "fail3"
-    run shell="printf '4\n'"
+    run shell="""
+      printf '4\n'
+    """
   }
 
   task "fail5" description="Print 5 after fail4" {
     depends-on "fail4"
-    run shell="printf '5\n'"
+    run shell="""
+      printf '5\n'
+    """
   }
 
   task "shortfail" description="Print 20 lines and fail" {
-    run shell="for i in $(seq 1 20); do printf 'shortfail line %02d: this task fails after a shorter output block\n' \"$i\"; done; exit 1"
+    run shell="""
+      for i in $(seq 1 20); do
+        printf 'shortfail line %02d: this task fails after a shorter output block\n' "$i"
+      done
+      exit 1
+    """
   }
 }
