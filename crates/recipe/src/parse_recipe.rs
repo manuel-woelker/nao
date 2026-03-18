@@ -6,20 +6,24 @@ use crate::recipe_error::RecipeError;
 use crate::run_spec::{ContainerRunSpec, RunSpec};
 use crate::task::Task;
 use crate::task_name::TaskName;
-use kdl::{KdlDocument, KdlEntry, KdlNode, KdlValue};
+use kdl::{KdlDiagnostic, KdlDocument, KdlEntry, KdlError, KdlNode, KdlValue};
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
+use nao_base::result::ResultExt;
 use nao_base::shared_string::SharedString;
 use nao_pal::pal::Pal;
 use nao_pal::pal_real::PalReal;
 use std::collections::BTreeSet;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 
 /// Parses a recipe from a KDL source string.
-pub fn parse_recipe(source: &str) -> Result<Recipe, RecipeError> {
+pub fn parse_recipe(source: &str) -> NaoResult<Recipe> {
     let document: KdlDocument = source
-        .parse()
-        .map_err(|error| RecipeError::new(format!("failed to parse recipe KDL: {error}")))?;
-    parse_recipe_document(&document)
+        .parse::<KdlDocument>()
+        .map_err(render_kdl_parse_error)
+        .with_context(|| "failed to parse recipe KDL")?;
+    parse_recipe_document(&document).map_err(Into::into)
 }
 
 /// Loads and parses a recipe file using the real platform implementation.
@@ -31,7 +35,45 @@ pub fn load_recipe(path: &FilePath) -> NaoResult<Recipe> {
 /// Loads and parses a recipe file using the supplied platform abstraction.
 pub fn load_recipe_with_pal(pal: &dyn Pal, path: &FilePath) -> NaoResult<Recipe> {
     let source = pal.read_file_to_string(path)?;
-    parse_recipe(&source).map_err(Into::into)
+    parse_recipe(&source)
+}
+
+#[derive(Debug)]
+struct KdlParseDiagnosticError {
+    message: SharedString,
+}
+
+impl Display for KdlParseDiagnosticError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message.as_str())
+    }
+}
+
+impl Error for KdlParseDiagnosticError {}
+
+fn render_kdl_parse_error(error: KdlError) -> KdlParseDiagnosticError {
+    let mut rendered = String::from("Failed to parse KDL document");
+
+    for diagnostic in &error.diagnostics {
+        rendered.push_str("\n- ");
+        rendered.push_str(&render_kdl_diagnostic(diagnostic));
+    }
+
+    KdlParseDiagnosticError {
+        message: SharedString::from(rendered),
+    }
+}
+
+fn render_kdl_diagnostic(diagnostic: &KdlDiagnostic) -> String {
+    let mut rendered = diagnostic.to_string();
+
+    if let Some(help) = &diagnostic.help {
+        rendered.push_str(" (help: ");
+        rendered.push_str(help);
+        rendered.push(')');
+    }
+
+    rendered
 }
 
 fn parse_recipe_document(document: &KdlDocument) -> Result<Recipe, RecipeError> {
@@ -395,7 +437,11 @@ mod tests {
         )
         .unwrap_err();
 
-        expect!["duplicate task name `build`"].assert_eq(&error.to_string());
+        assert!(
+            error
+                .to_test_string()
+                .contains("duplicate task name `build`")
+        );
     }
 
     #[test]
@@ -412,7 +458,11 @@ mod tests {
         )
         .unwrap_err();
 
-        expect!["task `test` depends on unknown task `build`"].assert_eq(&error.to_string());
+        assert!(
+            error
+                .to_test_string()
+                .contains("task `test` depends on unknown task `build`")
+        );
     }
 
     #[test]
@@ -428,10 +478,9 @@ mod tests {
         )
         .unwrap_err();
 
-        expect![
+        assert!(error.to_test_string().contains(
             "task `build` run node must define exactly one of `shell`, `script`, or `container`"
-        ]
-        .assert_eq(&error.to_string());
+        ));
     }
 
     #[test]
@@ -448,8 +497,20 @@ mod tests {
         )
         .unwrap_err();
 
-        expect!["task `build` env nodes must use named properties like `env KEY=\"value\"`"]
-            .assert_eq(&error.to_string());
+        assert!(
+            error.to_test_string().contains(
+                "task `build` env nodes must use named properties like `env KEY=\"value\"`"
+            )
+        );
+    }
+
+    #[test]
+    fn adds_context_for_invalid_kdl() {
+        let error = parse_recipe("recipe \"default\" {").unwrap_err();
+        let rendered = error.to_test_string();
+
+        assert!(rendered.contains("failed to parse recipe KDL"));
+        assert!(rendered.contains("Failed to parse KDL document"));
     }
 
     #[test]
