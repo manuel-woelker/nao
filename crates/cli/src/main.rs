@@ -1,6 +1,5 @@
 mod runner;
 
-use nao_base::cli::try_main_with_headline;
 use nao_base::err;
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
@@ -18,10 +17,19 @@ xflags::xflags! {
 }
 
 fn main() -> ExitCode {
-    try_main_with_headline("nao CLI failed", run)
+    match run() {
+        Ok(exit_code) => exit_code,
+        Err(error) => {
+            eprint!(
+                "{}",
+                nao_base::cli::format_cli_error("nao CLI failed", &error)
+            );
+            ExitCode::FAILURE
+        }
+    }
 }
 
-fn run() -> NaoResult<()> {
+fn run() -> NaoResult<ExitCode> {
     let flags = Nao::from_env().map_err(|error| err!("{error}"))?;
     let recipe_path = flags
         .recipe_file
@@ -29,6 +37,6 @@ fn run() -> NaoResult<()> {
     let runner = Runner::new(PalReal::new_handle());
     let output = runner.execute(&FilePath::new(&recipe_path), flags.list, &flags.task_name)?;
 
-    print!("{output}");
-    Ok(())
+    print!("{}", output.output);
+    Ok(output.exit_code)
 }

@@ -7,3 +7,5 @@ pub mod task_output_framer;
 pub use planned_run::PlannedRun;
 pub use run_engine::RunEngine;
 pub use run_execution_result::RunExecutionResult;
+pub use run_execution_result::RunStatus;
+pub use run_execution_result::TaskFailure;

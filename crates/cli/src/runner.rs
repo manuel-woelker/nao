@@ -3,13 +3,24 @@ use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
 use nao_engine::RunEngine;
+use nao_engine::RunStatus;
+use nao_engine::TaskFailure;
 use nao_pal::pal::PalHandle;
 use nao_recipe::{Task, TaskName};
 use std::io::Write as _;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
+
+/// Describes CLI output and exit status for a runner invocation.
+pub struct RunnerOutput {
+    /// Rendered user-facing output.
+    pub output: String,
+    /// Process exit code that should be returned by the CLI.
+    pub exit_code: ExitCode,
+}
 
 /// Executes CLI requests against a recipe file.
 pub struct Runner {
@@ -32,9 +43,12 @@ impl Runner {
         recipe_path: &FilePath,
         list: bool,
         task_names: &[String],
-    ) -> NaoResult<String> {
+    ) -> NaoResult<RunnerOutput> {
         if list {
-            return Ok(self.render_task_list(&self.engine.list_tasks(recipe_path)?));
+            return Ok(RunnerOutput {
+                output: self.render_task_list(&self.engine.list_tasks(recipe_path)?),
+                exit_code: ExitCode::SUCCESS,
+            });
         }
 
         let plan = self.engine.plan_run(recipe_path, task_names)?;
@@ -49,11 +63,24 @@ impl Runner {
 
         let result = self.engine.execute_planned_run(recipe_path, &plan)?;
         drop(spinner);
-        Ok(render_success_summary(
-            &result.goal_tasks,
-            result.total_task_count,
-            result.duration_nanos,
-        ))
+        let output = match &result.status {
+            RunStatus::Completed => render_success_summary(
+                &result.goal_tasks,
+                result.total_task_count,
+                result.duration_nanos,
+            ),
+            RunStatus::Failed(task_failure) => {
+                render_failure_summary(&result.goal_tasks, task_failure)
+            }
+        };
+
+        Ok(RunnerOutput {
+            output,
+            exit_code: match result.status {
+                RunStatus::Completed => ExitCode::SUCCESS,
+                RunStatus::Failed(_) => ExitCode::FAILURE,
+            },
+        })
     }
 
     fn render_task_list(&self, tasks: &[Task]) -> String {
@@ -105,6 +132,19 @@ fn render_running_line(line_body: &str) -> String {
     format!("🚀 {line_body}\n")
 }
 
+fn render_failure_summary(goal_tasks: &[SharedString], task_failure: &TaskFailure) -> String {
+    format!(
+        "\u{1b}[1;31m❌\u{1b}[0m {} failed because {} failed with exit code {} in {} after {} completed successfully\n",
+        style_bold_white(&join_goal_tasks(goal_tasks)),
+        style_bold_white(task_failure.task_name.as_str()),
+        style_bold_white(&task_failure.exit_code.to_string()),
+        style_bold_white(&pretty_duration(task_failure.elapsed_nanos)),
+        style_bold_white(&render_completed_task_count(
+            task_failure.successful_task_count
+        )),
+    )
+}
+
 fn render_running_line_body(goal_tasks: &[TaskName], total_task_count: usize) -> String {
     let prerequisite_task_count = total_task_count.saturating_sub(goal_tasks.len());
     format!(
@@ -137,6 +177,17 @@ fn join_goal_task_names(goal_tasks: &[TaskName]) -> String {
 
 fn style_bold_white(text: &str) -> String {
     format!("\u{1b}[1;37m{text}\u{1b}[0m")
+}
+
+fn render_completed_task_count(successful_task_count: usize) -> String {
+    format!(
+        "{successful_task_count} {}",
+        if successful_task_count == 1 {
+            "task"
+        } else {
+            "tasks"
+        }
+    )
 }
 
 struct RunningSpinner {
@@ -196,6 +247,7 @@ fn pretty_duration(duration_nanos: u128) -> String {
 mod tests {
     use super::Runner;
     use super::pretty_duration;
+    use super::render_failure_summary;
     use super::render_running_line;
     use super::render_running_line_body;
     use super::render_success_summary;
@@ -203,6 +255,7 @@ mod tests {
     use nao_base::file_path::FilePath;
     use nao_base::shared_string::SharedString;
     use nao_base::timestamp::Timestamp;
+    use nao_engine::TaskFailure;
     use nao_pal::pal::PalHandle;
     use nao_pal::pal_mock::PalMock;
     use nao_pal::process_command::ProcessCommand;
@@ -213,6 +266,7 @@ mod tests {
     use nao_pal::process_result::ProcessResult;
     use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
     use nao_recipe::TaskName;
+    use std::process::ExitCode;
 
     fn test_runner() -> (Runner, PalMock) {
         let pal = PalMock::new();
@@ -282,7 +336,8 @@ mod tests {
               build  Build the workspace
               test   Run the test suite
         "#]]
-        .assert_eq(&nao_base::unansi(&output));
+        .assert_eq(&nao_base::unansi(&output.output));
+        assert_eq!(output.exit_code, ExitCode::SUCCESS);
     }
 
     #[test]
@@ -299,7 +354,56 @@ mod tests {
         expect![[r#"
             ✅ Suceeded test in 0ns (2 tasks)
         "#]]
-        .assert_eq(&nao_base::unansi(&output));
+        .assert_eq(&nao_base::unansi(&output.output));
+        assert_eq!(output.exit_code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn renders_failed_task_summary_without_error_wrapper() {
+        let (runner, pal) = test_runner();
+        set_script_process(&pal, "./scripts/build.sh", b"build ok\n");
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "./scripts/test.sh".into(),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::Output(ProcessOutputEvent {
+                    timestamp: Timestamp::new(1),
+                    stream: ProcessOutputStream::Stdout,
+                    bytes: b"boom\n".to_vec(),
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(2),
+                    stream: ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(3),
+                    stream: ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(4),
+                    exit_code: Some(1),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(4),
+                exit_code: Some(1),
+            },
+        );
+
+        let output = runner
+            .execute(&FilePath::from("nao.kdl"), false, &["test".to_owned()])
+            .unwrap();
+
+        expect![[r#"
+            ❌ test failed because test failed with exit code 1 in 4ns after 1 task completed successfully
+        "#]]
+        .assert_eq(&nao_base::unansi(&output.output));
+        assert_eq!(output.exit_code, ExitCode::FAILURE);
     }
 
     #[test]
@@ -333,6 +437,24 @@ mod tests {
 
         expect![[r#"
             🚀 Running lint,test and 3 prerequisite tasks
+        "#]]
+        .assert_eq(&nao_base::unansi(&rendered));
+    }
+
+    #[test]
+    fn renders_failure_summary_for_multiple_completed_tasks() {
+        let rendered = render_failure_summary(
+            &[SharedString::from("fail5")],
+            &TaskFailure {
+                task_name: SharedString::from("fail3"),
+                exit_code: 1,
+                elapsed_nanos: 2_500_000,
+                successful_task_count: 2,
+            },
+        );
+
+        expect![[r#"
+            ❌ fail5 failed because fail3 failed with exit code 1 in 2.5ms after 2 tasks completed successfully
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
     }

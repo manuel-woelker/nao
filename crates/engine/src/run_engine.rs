@@ -2,6 +2,8 @@ use crate::planned_run::PlannedRun;
 use crate::run_artifact_writer::RunArtifactWriter;
 use crate::run_artifact_writer::TaskArtifactRecord;
 use crate::run_execution_result::RunExecutionResult;
+use crate::run_execution_result::RunStatus;
+use crate::run_execution_result::TaskFailure;
 use crate::task_output_framer::TaskOutputFramer;
 use nao_base::err;
 use nao_base::file_path::FilePath;
@@ -103,6 +105,8 @@ impl RunEngine {
         let mut task_records = Vec::new();
         let mut failure_message = None;
         let mut failed = false;
+        let mut successful_task_count = 0usize;
+        let mut run_status = RunStatus::Completed;
 
         for task in &plan.tasks {
             if failed {
@@ -132,11 +136,19 @@ impl RunEngine {
                     let task_failed = result.exit_code.unwrap_or(1) != 0;
                     if task_failed {
                         failed = true;
-                        failure_message = Some(format!(
-                            "task `{}` failed with exit code {}",
-                            task.name.as_str(),
-                            result.exit_code.unwrap_or(-1)
-                        ));
+                        let task_failure = TaskFailure {
+                            task_name: task.name.0.clone(),
+                            exit_code: result.exit_code.unwrap_or(-1),
+                            elapsed_nanos: result
+                                .finished_at
+                                .as_nanos()
+                                .saturating_sub(run_started_at.as_nanos()),
+                            successful_task_count,
+                        };
+                        failure_message = Some(render_task_failure_message(&task_failure));
+                        run_status = RunStatus::Failed(task_failure);
+                    } else {
+                        successful_task_count += 1;
                     }
 
                     task_records.push(TaskArtifactRecord {
@@ -161,7 +173,15 @@ impl RunEngine {
                     output.push_str(task_output.as_str());
 
                     failed = true;
-                    failure_message = Some(error.to_test_string());
+                    failure_message = Some(render_task_execution_error_message(
+                        task.name.as_str(),
+                        self.pal
+                            .now()
+                            .as_nanos()
+                            .saturating_sub(run_started_at.as_nanos()),
+                        successful_task_count,
+                        &error.to_test_string(),
+                    ));
                     task_records.push(TaskArtifactRecord {
                         name: task.name.0.clone(),
                         status: SharedString::from("failed"),
@@ -185,10 +205,6 @@ impl RunEngine {
             failure_message.as_deref(),
         )?;
 
-        if let Some(failure_message) = failure_message {
-            return Err(err!("{failure_message}"));
-        }
-
         Ok(RunExecutionResult {
             output,
             goal_tasks: plan
@@ -201,6 +217,7 @@ impl RunEngine {
                 .as_nanos()
                 .saturating_sub(run_started_at.as_nanos()),
             run_directory: writer.run_directory(),
+            status: run_status,
         })
     }
 
@@ -235,6 +252,53 @@ impl RunEngine {
         tasks.push(task.clone());
         Ok(())
     }
+}
+
+fn render_task_failure_message(task_failure: &TaskFailure) -> String {
+    format!(
+        "task `{}` failed with exit code {} after {} ({} completed successfully)",
+        task_failure.task_name.as_str(),
+        task_failure.exit_code,
+        pretty_duration(task_failure.elapsed_nanos),
+        render_completed_task_count(task_failure.successful_task_count),
+    )
+}
+
+fn render_task_execution_error_message(
+    task_name: &str,
+    elapsed_nanos: u128,
+    successful_task_count: usize,
+    error: &str,
+) -> String {
+    format!(
+        "task `{task_name}` failed after {} ({} completed successfully): {error}",
+        pretty_duration(elapsed_nanos),
+        render_completed_task_count(successful_task_count),
+    )
+}
+
+fn render_completed_task_count(successful_task_count: usize) -> String {
+    format!(
+        "{successful_task_count} {}",
+        if successful_task_count == 1 {
+            "task"
+        } else {
+            "tasks"
+        }
+    )
+}
+
+fn pretty_duration(duration_nanos: u128) -> String {
+    if duration_nanos < 1_000 {
+        return format!("{duration_nanos}ns");
+    }
+    if duration_nanos < 1_000_000 {
+        return format!("{:.1}us", duration_nanos as f64 / 1_000.0);
+    }
+    if duration_nanos < 1_000_000_000 {
+        return format!("{:.1}ms", duration_nanos as f64 / 1_000_000.0);
+    }
+    format!("{:.1}s", duration_nanos as f64 / 1_000_000_000.0)
 }
 
 fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<ProcessCommand> {
@@ -285,6 +349,8 @@ fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<
 #[cfg(test)]
 mod tests {
     use super::RunEngine;
+    use crate::run_execution_result::RunStatus;
+    use crate::run_execution_result::TaskFailure;
     use expect_test::expect;
     use nao_base::file_path::FilePath;
     use nao_base::shared_string::SharedString;
@@ -443,6 +509,7 @@ Running task `test`
         assert_eq!(output.goal_tasks, vec![SharedString::from("test")]);
         assert_eq!(output.total_task_count, 2);
         assert_eq!(output.duration_nanos, 0);
+        assert_eq!(output.status, RunStatus::Completed);
         pal.verify_effects(expect![
             r#"READ FILE: nao.kdl
 CREATE DIRECTORY: .nao/runs
@@ -557,12 +624,19 @@ WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-summary.json -> {
         set_script_process(&pal, "./scripts/test.sh", &[b"boom\n"], 1);
         let engine = RunEngine::new(PalHandle::new(pal.clone()));
 
-        let error = engine
+        let result = engine
             .execute_run(&FilePath::from("nao.kdl"), &["package".to_owned()])
-            .unwrap_err();
+            .unwrap();
 
-        let rendered_error = error.to_test_string();
-        assert!(rendered_error.contains("task `test` failed with exit code 1"));
+        assert_eq!(
+            result.status,
+            RunStatus::Failed(TaskFailure {
+                task_name: SharedString::from("test"),
+                exit_code: 1,
+                elapsed_nanos: 4,
+                successful_task_count: 1,
+            })
+        );
 
         let summary = pal
             .read_file_string(".nao/runs/1970-01-01T00-00-10Z-package/nao-summary.json")
@@ -570,5 +644,10 @@ WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-summary.json -> {
         assert!(summary.contains("\"result\": \"failed\""));
         assert!(summary.contains("\"name\": \"package\""));
         assert!(summary.contains("\"status\": \"skipped\""));
+        assert!(
+            summary.contains(
+                "\"failure_message\": \"task `test` failed with exit code 1 after 4ns (1 task completed successfully)\""
+            )
+        );
     }
 }
