@@ -16,6 +16,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
+struct NoopRunObserver;
+
+impl RunObserver for NoopRunObserver {}
+
 /// Describes CLI output and exit status for a runner invocation.
 pub struct RunnerOutput {
     /// Rendered user-facing output.
@@ -53,6 +57,8 @@ impl Runner {
             });
         }
 
+        let run_started_at = self.pal.now();
+        let run_started_system_time = self.pal.system_time();
         let plan = self.engine.plan_run(recipe_path, task_names)?;
         let running_line_body = render_running_line_body(&plan.requested_tasks, plan.tasks.len());
         let mut line_per_task_display = None;
@@ -78,13 +84,29 @@ impl Runner {
         }
 
         let result = if let Some(display) = line_per_task_display.as_mut() {
-            self.engine
-                .execute_planned_run_with_observer(recipe_path, &plan, display)?
+            self.engine.execute_planned_run_with_observer_started_at(
+                recipe_path,
+                &plan,
+                display,
+                run_started_at,
+                run_started_system_time,
+            )?
         } else if let Some(display) = single_line_display.as_mut() {
-            self.engine
-                .execute_planned_run_with_observer(recipe_path, &plan, display)?
+            self.engine.execute_planned_run_with_observer_started_at(
+                recipe_path,
+                &plan,
+                display,
+                run_started_at,
+                run_started_system_time,
+            )?
         } else {
-            self.engine.execute_planned_run(recipe_path, &plan)?
+            self.engine.execute_planned_run_with_observer_started_at(
+                recipe_path,
+                &plan,
+                &mut NoopRunObserver,
+                run_started_at,
+                run_started_system_time,
+            )?
         };
         drop(single_line_display);
         drop(line_per_task_display);

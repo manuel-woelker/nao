@@ -21,6 +21,7 @@ use nao_recipe::{RunSpec, Task, TaskName, load_recipe_with_pal};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::mpsc;
 use std::thread;
+use std::time::SystemTime;
 
 /// Loads recipes, plans runs, and executes tasks.
 pub struct RunEngine {
@@ -93,8 +94,17 @@ impl RunEngine {
         recipe_path: &FilePath,
         task_names: &[String],
     ) -> NaoResult<RunExecutionResult> {
+        let run_started_at = self.pal.now();
+        let run_started_system_time = self.pal.system_time();
         let plan = self.plan_run(recipe_path, task_names)?;
-        self.execute_planned_run(recipe_path, &plan)
+        let mut observer = NoopRunObserver;
+        self.execute_planned_run_with_observer_started_at(
+            recipe_path,
+            &plan,
+            &mut observer,
+            run_started_at,
+            run_started_system_time,
+        )
     }
 
     /// Executes an already planned run sequentially and returns rendered output.
@@ -104,7 +114,13 @@ impl RunEngine {
         plan: &PlannedRun,
     ) -> NaoResult<RunExecutionResult> {
         let mut observer = NoopRunObserver;
-        self.execute_planned_run_with_observer(recipe_path, plan, &mut observer)
+        self.execute_planned_run_with_observer_started_at(
+            recipe_path,
+            plan,
+            &mut observer,
+            self.pal.now(),
+            self.pal.system_time(),
+        )
     }
 
     /// Executes an already planned run sequentially and emits task lifecycle updates.
@@ -114,14 +130,30 @@ impl RunEngine {
         plan: &PlannedRun,
         observer: &mut dyn RunObserver,
     ) -> NaoResult<RunExecutionResult> {
+        self.execute_planned_run_with_observer_started_at(
+            recipe_path,
+            plan,
+            observer,
+            self.pal.now(),
+            self.pal.system_time(),
+        )
+    }
+
+    /// Executes an already planned run using the provided run start time and emits task lifecycle updates.
+    pub fn execute_planned_run_with_observer_started_at(
+        &self,
+        recipe_path: &FilePath,
+        plan: &PlannedRun,
+        observer: &mut dyn RunObserver,
+        run_started_at: Timestamp,
+        run_started_system_time: SystemTime,
+    ) -> NaoResult<RunExecutionResult> {
         let recipe_directory = recipe_path.parent().unwrap_or_else(|| FilePath::from("."));
         let recipe_directory = if recipe_directory.as_str().is_empty() {
             FilePath::from(".")
         } else {
             recipe_directory
         };
-        let run_started_at = self.pal.now();
-        let run_started_system_time = self.pal.system_time();
         let writer = RunArtifactWriter::new(
             self.pal.clone(),
             &recipe_directory,
@@ -1104,7 +1136,7 @@ planned=slow,slow1,slowpoke,fast"#
 
         expect![[r#"
             × error task specifier `slow_` did not match any tasks
-              at crates/engine/src/run_engine.rs:536:20
+              at crates/engine/src/run_engine.rs:568:20
         "#]]
         .assert_eq(&error.to_test_string());
     }
