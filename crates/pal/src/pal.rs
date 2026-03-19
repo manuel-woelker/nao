@@ -58,6 +58,9 @@ pub trait Pal: Debug + Sync + Send + 'static {
     /// Returns whether normal process output targets an interactive terminal.
     fn is_interactive_terminal(&self) -> bool;
 
+    /// Returns the default task parallelism for this platform.
+    fn default_parallelism(&self) -> usize;
+
     /// Execute a child process and synchronously forward process events to the sink.
     fn run_process(
         &self,

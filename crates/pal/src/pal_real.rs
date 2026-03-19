@@ -311,6 +311,12 @@ impl Pal for PalReal {
         std::io::stdout().is_terminal()
     }
 
+    fn default_parallelism(&self) -> usize {
+        std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1)
+    }
+
     fn run_process(
         &self,
         command: &ProcessCommand,

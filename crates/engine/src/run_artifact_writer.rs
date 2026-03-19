@@ -1,4 +1,5 @@
 use crate::planned_run::PlannedRun;
+use crate::task_event_record::TaskEventRecord;
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
@@ -97,6 +98,7 @@ impl RunArtifactWriter {
         &self,
         planned_run: &PlannedRun,
         task_records: &[TaskArtifactRecord],
+        task_events: &[TaskEventRecord],
         run_finished_at: Timestamp,
         overall_result: &str,
         failure_message: Option<&str>,
@@ -122,7 +124,7 @@ impl RunArtifactWriter {
                 self.run_started_system_time,
                 self.run_started_at,
                 planned_run,
-                task_records,
+                task_events,
                 run_finished_at,
                 overall_result,
             )
@@ -251,7 +253,7 @@ fn render_events_jsonl(
     run_started_system_time: SystemTime,
     run_started_at: Timestamp,
     planned_run: &PlannedRun,
-    task_records: &[TaskArtifactRecord],
+    task_events: &[TaskEventRecord],
     run_finished_at: Timestamp,
     overall_result: &str,
 ) -> String {
@@ -269,54 +271,59 @@ fn render_events_jsonl(
         .unwrap(),
     );
 
-    for task_record in task_records {
-        if let Some(started_at) = task_record.started_at {
-            lines.push(
+    for task_event in task_events {
+        match task_event {
+            TaskEventRecord::Started {
+                task_name,
+                timestamp,
+            } => lines.push(
                 serde_json::to_string(&json!({
                     "type": "task_started",
                     "timestamp": format_iso8601(absolute_system_time(
                         run_started_system_time,
                         run_started_at,
-                        started_at,
+                        *timestamp,
                     )),
-                    "task": task_record.name.as_str(),
+                    "task": task_name.as_str(),
                 }))
                 .unwrap(),
-            );
-        }
-
-        if task_record.status == "skipped" {
-            lines.push(
-                serde_json::to_string(&json!({
-                    "type": "task_skipped",
-                    "timestamp": format_iso8601(absolute_system_time(
-                        run_started_system_time,
-                        run_started_at,
-                        task_record.finished_at.unwrap_or(run_finished_at),
-                    )),
-                    "task": task_record.name.as_str(),
-                }))
-                .unwrap(),
-            );
-            continue;
-        }
-
-        if let Some(finished_at) = task_record.finished_at {
-            lines.push(
+            ),
+            TaskEventRecord::Finished {
+                task_name,
+                timestamp,
+                status,
+                result,
+                exit_code,
+            } => lines.push(
                 serde_json::to_string(&json!({
                     "type": "task_finished",
                     "timestamp": format_iso8601(absolute_system_time(
                         run_started_system_time,
                         run_started_at,
-                        finished_at,
+                        *timestamp,
                     )),
-                    "task": task_record.name.as_str(),
-                    "status": task_record.status.as_str(),
-                    "result": task_record.result.as_str(),
-                    "exit_code": task_record.exit_code,
+                    "task": task_name.as_str(),
+                    "status": status.as_str(),
+                    "result": result.as_str(),
+                    "exit_code": exit_code,
                 }))
                 .unwrap(),
-            );
+            ),
+            TaskEventRecord::Skipped {
+                task_name,
+                timestamp,
+            } => lines.push(
+                serde_json::to_string(&json!({
+                    "type": "task_skipped",
+                    "timestamp": format_iso8601(absolute_system_time(
+                        run_started_system_time,
+                        run_started_at,
+                        *timestamp,
+                    )),
+                    "task": task_name.as_str(),
+                }))
+                .unwrap(),
+            ),
         }
     }
 

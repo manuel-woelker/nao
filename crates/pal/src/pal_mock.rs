@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use std::time::SystemTime;
 
 #[derive(Clone)]
@@ -22,8 +24,9 @@ pub struct PalMock {
 struct PalMockInner {
     effects_string: String,
     file_map: HashMap<FilePath, Vec<u8>>,
-    process_executions: HashMap<ProcessCommand, (Vec<ProcessEvent>, ProcessResult)>,
+    process_executions: HashMap<ProcessCommand, (Vec<ProcessEvent>, ProcessResult, Duration)>,
     interactive_terminal: bool,
+    default_parallelism: usize,
     current_timestamp: Timestamp,
     current_system_time: SystemTime,
 }
@@ -36,6 +39,7 @@ impl PalMock {
                 file_map: HashMap::new(),
                 process_executions: HashMap::new(),
                 interactive_terminal: false,
+                default_parallelism: 1,
                 current_timestamp: Timestamp::new(0),
                 current_system_time: SystemTime::UNIX_EPOCH,
             })),
@@ -75,10 +79,20 @@ impl PalMock {
         events: Vec<ProcessEvent>,
         result: ProcessResult,
     ) {
+        self.set_process_execution_with_delay(command, events, result, Duration::ZERO);
+    }
+
+    pub fn set_process_execution_with_delay(
+        &self,
+        command: ProcessCommand,
+        events: Vec<ProcessEvent>,
+        result: ProcessResult,
+        delay: Duration,
+    ) {
         self.inner
             .write()
             .process_executions
-            .insert(command, (events, result));
+            .insert(command, (events, result, delay));
     }
 
     pub fn set_current_timestamp(&self, timestamp: Timestamp) {
@@ -87,6 +101,10 @@ impl PalMock {
 
     pub fn set_interactive_terminal(&self, interactive_terminal: bool) {
         self.inner.write().interactive_terminal = interactive_terminal;
+    }
+
+    pub fn set_default_parallelism(&self, default_parallelism: usize) {
+        self.inner.write().default_parallelism = default_parallelism;
     }
 
     pub fn set_current_system_time(&self, system_time: SystemTime) {
@@ -175,6 +193,10 @@ impl Pal for PalMock {
         self.inner.read().interactive_terminal
     }
 
+    fn default_parallelism(&self) -> usize {
+        self.inner.read().default_parallelism
+    }
+
     fn run_process(
         &self,
         command: &ProcessCommand,
@@ -190,7 +212,7 @@ impl Pal for PalMock {
                 .collect::<Vec<_>>()
                 .join(" ")
         ));
-        let (events, result) = self
+        let (events, result, delay) = self
             .inner
             .read()
             .process_executions
@@ -202,6 +224,10 @@ impl Pal for PalMock {
                     command.executable
                 )
             })?;
+
+        if delay > Duration::ZERO {
+            thread::sleep(delay);
+        }
 
         for event in events {
             sink.handle_event(event)?;

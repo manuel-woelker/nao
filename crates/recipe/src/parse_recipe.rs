@@ -39,7 +39,11 @@ pub fn load_recipe(path: &FilePath) -> NaoResult<Recipe> {
 /// Loads and parses a recipe file using the supplied platform abstraction.
 pub fn load_recipe_with_pal(pal: &dyn Pal, path: &FilePath) -> NaoResult<Recipe> {
     let source = pal.read_file_to_string(path)?;
-    parse_recipe(&source)
+    let mut recipe = parse_recipe(&source)?;
+    if recipe.config.max_parallel_tasks.is_none() {
+        recipe.config.max_parallel_tasks = Some(pal.default_parallelism());
+    }
+    Ok(recipe)
 }
 
 #[derive(Debug)]
@@ -175,7 +179,7 @@ fn parse_recipe_config(source: &str, node: &KdlNode) -> Result<RecipeConfig, Rec
             ));
         };
 
-        if name.value() != "live-display" {
+        if name.value() != "live-display" && name.value() != "max-parallel-tasks" {
             return Err(recipe_error_for_entry(
                 source,
                 entry,
@@ -196,6 +200,18 @@ fn parse_recipe_config(source: &str, node: &KdlNode) -> Result<RecipeConfig, Rec
                 ),
             )
         })?;
+    }
+    if let Some(max_parallel_tasks) =
+        parse_optional_usize_property(source, node, "max-parallel-tasks")?
+    {
+        if max_parallel_tasks == 0 {
+            return Err(recipe_error_for_node(
+                source,
+                node,
+                "config max-parallel-tasks must be at least 1",
+            ));
+        }
+        config.max_parallel_tasks = Some(max_parallel_tasks);
     }
 
     Ok(config)
@@ -510,6 +526,44 @@ fn parse_optional_string_property(
     Ok(Some(parse_string_value(source, entry, property_name)?))
 }
 
+fn parse_optional_usize_property(
+    source: &str,
+    node: &KdlNode,
+    property_name: &str,
+) -> Result<Option<usize>, RecipeError> {
+    let mut matching = node
+        .entries()
+        .iter()
+        .filter(|entry| entry.name().map(|name| name.value()) == Some(property_name));
+
+    let Some(entry) = matching.next() else {
+        return Ok(None);
+    };
+
+    if matching.next().is_some() {
+        return Err(recipe_error_for_entry(
+            source,
+            entry,
+            format!("property `{property_name}` must not be repeated"),
+        ));
+    }
+
+    match entry.value() {
+        KdlValue::Integer(value) => usize::try_from(*value).map(Some).map_err(|_| {
+            recipe_error_for_entry(
+                source,
+                entry,
+                format!("property `{property_name}` must be a non-negative integer value"),
+            )
+        }),
+        _ => Err(recipe_error_for_entry(
+            source,
+            entry,
+            format!("property `{property_name}` must be a non-negative integer value"),
+        )),
+    }
+}
+
 fn parse_string_value(
     source: &str,
     entry: &KdlEntry,
@@ -705,6 +759,84 @@ mod tests {
     }
 
     #[test]
+    fn defaults_recipe_max_parallel_tasks_to_one() {
+        let recipe = parse_recipe(
+            r#"
+            recipe "default" {
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(recipe.config.max_parallel_tasks, None);
+    }
+
+    #[test]
+    fn parses_recipe_max_parallel_tasks_config() {
+        let recipe = parse_recipe(
+            r#"
+            recipe "default" {
+              config max-parallel-tasks=4
+
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(recipe.config.max_parallel_tasks, Some(4));
+    }
+
+    #[test]
+    fn rejects_zero_recipe_max_parallel_tasks_config() {
+        let error = parse_recipe(
+            r#"
+            recipe "default" {
+              config max-parallel-tasks=0
+
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("config max-parallel-tasks must be at least 1")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_recipe_max_parallel_tasks_config_type() {
+        let error = parse_recipe(
+            r#"
+            recipe "default" {
+              config max-parallel-tasks="many"
+
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("property `max-parallel-tasks` must be a non-negative integer value")
+        );
+    }
+
+    #[test]
     fn rejects_invalid_recipe_live_display_config() {
         let error = parse_recipe(
             r#"
@@ -835,6 +967,7 @@ mod tests {
     #[test]
     fn loads_recipe_via_pal_mock() {
         let pal = PalMock::new();
+        pal.set_default_parallelism(8);
         pal.set_file(
             "nao.kdl",
             r#"
@@ -850,6 +983,7 @@ mod tests {
 
         assert_eq!(recipe.name, SharedString::from("default"));
         assert_eq!(recipe.tasks.len(), 1);
+        assert_eq!(recipe.config.max_parallel_tasks, Some(8));
         expect!["READ FILE: nao.kdl\n"].assert_eq(&pal.get_effects());
     }
 }

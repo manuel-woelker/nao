@@ -56,24 +56,31 @@ impl Runner {
         let plan = self.engine.plan_run(recipe_path, task_names)?;
         let running_line_body = render_running_line_body(&plan.requested_tasks, plan.tasks.len());
         let mut line_per_task_display = None;
-        let single_line_display = if self.pal.is_interactive_terminal() {
+        let mut single_line_display = None;
+        if self.pal.is_interactive_terminal() {
             match plan.live_display {
-                LiveDisplay::SingleLine => Some(RunningSpinner::start(running_line_body.clone())),
+                LiveDisplay::SingleLine => {
+                    single_line_display = Some(SingleLineDisplay::start(
+                        running_line_body.clone(),
+                        &plan.tasks,
+                    ));
+                }
                 LiveDisplay::LinePerTask => {
                     line_per_task_display = Some(LinePerTaskDisplay::start(
                         running_line_body.clone(),
                         &plan.tasks,
                     ));
-                    None
                 }
             }
         } else {
             print!("{}", render_running_line(&running_line_body));
             std::io::stdout().flush().unwrap();
-            None
-        };
+        }
 
         let result = if let Some(display) = line_per_task_display.as_mut() {
+            self.engine
+                .execute_planned_run_with_observer(recipe_path, &plan, display)?
+        } else if let Some(display) = single_line_display.as_mut() {
             self.engine
                 .execute_planned_run_with_observer(recipe_path, &plan, display)?
         } else {
@@ -240,38 +247,87 @@ fn render_completed_task_count(successful_task_count: usize) -> String {
     )
 }
 
-struct RunningSpinner {
+struct SingleLineDisplay {
     stop: Arc<AtomicBool>,
+    snapshot: Arc<Mutex<LiveTaskSnapshot>>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
-impl RunningSpinner {
-    fn start(line: String) -> Self {
+impl SingleLineDisplay {
+    fn start(header: String, tasks: &[Task]) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
+        let snapshot = Arc::new(Mutex::new(LiveTaskSnapshot {
+            header,
+            tasks: tasks
+                .iter()
+                .map(|task| LiveTaskState {
+                    name: task.name.0.clone(),
+                    status: LiveTaskStatus::Pending,
+                })
+                .collect(),
+        }));
         let thread_stop = Arc::clone(&stop);
+        let thread_snapshot = Arc::clone(&snapshot);
         let handle = thread::spawn(move || {
             const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let mut frame_index = 0usize;
 
             while !thread_stop.load(Ordering::Relaxed) {
-                print!("\r{} {}", FRAMES[frame_index], line);
+                let rendered = {
+                    let snapshot = thread_snapshot.lock().unwrap();
+                    render_single_line_display(snapshot.clone())
+                };
+                print!("\r{} {}\x1b[K", FRAMES[frame_index], rendered);
                 std::io::stdout().flush().unwrap();
                 frame_index = (frame_index + 1) % FRAMES.len();
                 thread::sleep(Duration::from_millis(80));
             }
 
-            print!("\r🚀 {}\x1b[K\n", line);
+            let rendered = {
+                let snapshot = thread_snapshot.lock().unwrap();
+                render_single_line_display(snapshot.clone())
+            };
+            print!("\r🚀 {}\x1b[K\n", rendered);
             std::io::stdout().flush().unwrap();
         });
 
         Self {
             stop,
+            snapshot,
             handle: Some(handle),
         }
     }
+
+    fn update_task(&self, task_name: &str, status: LiveTaskStatus) {
+        let mut snapshot = self.snapshot.lock().unwrap();
+        let task = snapshot
+            .tasks
+            .iter_mut()
+            .find(|task| task.name.as_str() == task_name)
+            .unwrap();
+        task.status = status;
+    }
 }
 
-impl Drop for RunningSpinner {
+impl RunObserver for SingleLineDisplay {
+    fn on_task_started(&mut self, task_name: &str) {
+        self.update_task(task_name, LiveTaskStatus::Running);
+    }
+
+    fn on_task_completed(&mut self, task_name: &str) {
+        self.update_task(task_name, LiveTaskStatus::Completed);
+    }
+
+    fn on_task_failed(&mut self, task_name: &str) {
+        self.update_task(task_name, LiveTaskStatus::Failed);
+    }
+
+    fn on_task_skipped(&mut self, task_name: &str) {
+        self.update_task(task_name, LiveTaskStatus::Skipped);
+    }
+}
+
+impl Drop for SingleLineDisplay {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
@@ -296,20 +352,20 @@ struct LiveTaskState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LinePerTaskSnapshot {
+struct LiveTaskSnapshot {
     header: String,
     tasks: Vec<LiveTaskState>,
 }
 
 struct LinePerTaskDisplay {
     stop: Arc<AtomicBool>,
-    snapshot: Arc<Mutex<LinePerTaskSnapshot>>,
+    snapshot: Arc<Mutex<LiveTaskSnapshot>>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
 impl LinePerTaskDisplay {
     fn start(header: String, tasks: &[Task]) -> Self {
-        let snapshot = Arc::new(Mutex::new(LinePerTaskSnapshot {
+        let snapshot = Arc::new(Mutex::new(LiveTaskSnapshot {
             header,
             tasks: tasks
                 .iter()
@@ -396,7 +452,7 @@ impl Drop for LinePerTaskDisplay {
     }
 }
 
-fn render_line_per_task_display(snapshot: LinePerTaskSnapshot, running_symbol: &str) -> String {
+fn render_line_per_task_display(snapshot: LiveTaskSnapshot, running_symbol: &str) -> String {
     let mut output = String::new();
     let _ = writeln!(&mut output, "🚀 {}", snapshot.header);
 
@@ -410,6 +466,29 @@ fn render_line_per_task_display(snapshot: LinePerTaskSnapshot, running_symbol: &
     }
 
     output
+}
+
+fn render_single_line_display(snapshot: LiveTaskSnapshot) -> String {
+    let running = snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.status == LiveTaskStatus::Running)
+        .count();
+    let completed = snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.status == LiveTaskStatus::Completed)
+        .count();
+    let remaining = snapshot
+        .tasks
+        .iter()
+        .filter(|task| matches!(task.status, LiveTaskStatus::Pending))
+        .count();
+
+    format!(
+        "{} (running: {running}, completed: {completed}, remaining: {remaining})",
+        snapshot.header
+    )
 }
 
 fn render_live_task_status(status: LiveTaskStatus, running_symbol: &str) -> String {
@@ -437,7 +516,7 @@ fn pretty_duration(duration_nanos: u128) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::LinePerTaskSnapshot;
+    use super::LiveTaskSnapshot;
     use super::LiveTaskState;
     use super::LiveTaskStatus;
     use super::Runner;
@@ -446,6 +525,7 @@ mod tests {
     use super::render_line_per_task_display;
     use super::render_running_line;
     use super::render_running_line_body;
+    use super::render_single_line_display;
     use super::render_success_summary;
     use expect_test::expect;
     use nao_base::file_path::FilePath;
@@ -700,7 +780,7 @@ mod tests {
     #[test]
     fn renders_line_per_task_display() {
         let rendered = render_line_per_task_display(
-            LinePerTaskSnapshot {
+            LiveTaskSnapshot {
                 header: "Running test and 1 prerequisite task".to_owned(),
                 tasks: vec![
                     LiveTaskState {
@@ -712,8 +792,8 @@ mod tests {
                         status: LiveTaskStatus::Running,
                     },
                     LiveTaskState {
-                        name: SharedString::from("deploy"),
-                        status: LiveTaskStatus::Pending,
+                        name: SharedString::from("lint"),
+                        status: LiveTaskStatus::Running,
                     },
                     LiveTaskState {
                         name: SharedString::from("publish"),
@@ -732,10 +812,38 @@ mod tests {
             🚀 Running test and 1 prerequisite task
               ✅ build
               ⠙ test
-              ○ deploy
+              ⠙ lint
               ⏭ publish
               ❌ cleanup
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
+    }
+
+    #[test]
+    fn renders_single_line_display_with_concurrent_progress() {
+        let rendered = render_single_line_display(LiveTaskSnapshot {
+            header: "Running test and 2 prerequisite tasks".to_owned(),
+            tasks: vec![
+                LiveTaskState {
+                    name: SharedString::from("build"),
+                    status: LiveTaskStatus::Completed,
+                },
+                LiveTaskState {
+                    name: SharedString::from("lint"),
+                    status: LiveTaskStatus::Running,
+                },
+                LiveTaskState {
+                    name: SharedString::from("test"),
+                    status: LiveTaskStatus::Running,
+                },
+                LiveTaskState {
+                    name: SharedString::from("publish"),
+                    status: LiveTaskStatus::Pending,
+                },
+            ],
+        });
+
+        expect!["Running test and 2 prerequisite tasks (running: 2, completed: 1, remaining: 1)"]
+            .assert_eq(&nao_base::unansi(&rendered));
     }
 }

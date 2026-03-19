@@ -45,12 +45,25 @@ Dependencies are expressed by naming prerequisite tasks in the task definition. 
 
 Because dependencies are name-based, `nao` can determine which tasks may start immediately and which tasks must wait for earlier work to complete.
 
+# How is recipe-wide execution configured?
+
+Recipe-wide execution settings live in an optional `config` node.
+
+The current supported properties are:
+
+- `live-display`, which chooses how interactive terminal progress is rendered
+- `max-parallel-tasks`, which limits how many task processes may run at once
+
+If `max-parallel-tasks` is omitted, it defaults to the platform-reported core count.
+
 # What might a recipe file look like?
 
 The following example shows the intended shape of a KDL recipe file:
 
 ```kdl
 recipe "default" {
+  config live-display="line-per-task" max-parallel-tasks=4
+
   task "build" {
     run shell="cargo build --workspace"
     artifact "workspace-target" path="target"
