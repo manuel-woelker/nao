@@ -1,7 +1,9 @@
 use crate::artifact_spec::ArtifactSpec;
 use crate::dependency_name::DependencyName;
 use crate::environment_spec::EnvironmentSpec;
+use crate::live_display::LiveDisplay;
 use crate::recipe::Recipe;
+use crate::recipe_config::RecipeConfig;
 use crate::recipe_error::RecipeError;
 use crate::run_spec::{ContainerRunSpec, RunSpec};
 use crate::task::Task;
@@ -113,18 +115,90 @@ fn parse_recipe_document(source: &str, document: &KdlDocument) -> Result<Recipe,
         )
     })?;
 
+    let mut config = RecipeConfig::default();
+    let mut config_node = None;
     let mut tasks = Vec::new();
     for child in children.nodes() {
-        expect_node_name(source, child, "task")?;
-        tasks.push(parse_task(source, child)?);
+        match child.name().value() {
+            "config" => {
+                if config_node.is_some() {
+                    return Err(recipe_error_for_node(
+                        source,
+                        child,
+                        "recipe cannot define multiple config nodes",
+                    ));
+                }
+                config = parse_recipe_config(source, child)?;
+                config_node = Some(child);
+            }
+            "task" => tasks.push(parse_task(source, child)?),
+            other => {
+                return Err(recipe_error_for_node(
+                    source,
+                    child,
+                    format!("recipe contains unsupported node `{other}`"),
+                ));
+            }
+        }
     }
 
-    validate_tasks(source, &tasks, children.nodes())?;
+    let task_nodes = children
+        .nodes()
+        .iter()
+        .filter(|node| node.name().value() == "task")
+        .cloned()
+        .collect::<Vec<_>>();
+    validate_tasks(source, &tasks, &task_nodes)?;
 
     Ok(Recipe {
         name: recipe_name,
+        config,
         tasks,
     })
+}
+
+fn parse_recipe_config(source: &str, node: &KdlNode) -> Result<RecipeConfig, RecipeError> {
+    if node.children().is_some() {
+        return Err(recipe_error_for_node(
+            source,
+            node,
+            "config node does not support child nodes",
+        ));
+    }
+
+    for entry in node.entries() {
+        let Some(name) = entry.name() else {
+            return Err(recipe_error_for_node(
+                source,
+                node,
+                "config nodes must use named properties",
+            ));
+        };
+
+        if name.value() != "live-display" {
+            return Err(recipe_error_for_entry(
+                source,
+                entry,
+                format!("config property `{}` is not supported", name.value()),
+            ));
+        }
+    }
+
+    let mut config = RecipeConfig::default();
+    if let Some(live_display) = parse_optional_string_property(source, node, "live-display")? {
+        config.live_display = LiveDisplay::parse(live_display.as_str()).ok_or_else(|| {
+            recipe_error_for_node(
+                source,
+                node,
+                format!(
+                    "config live-display must be one of `single-line` or `line-per-task`, found `{}`",
+                    live_display.as_str()
+                ),
+            )
+        })?;
+    }
+
+    Ok(config)
 }
 
 fn parse_task(source: &str, node: &KdlNode) -> Result<Task, RecipeError> {
@@ -507,6 +581,7 @@ fn render_source_span(source: &str, span: SourceSpan) -> String {
 mod tests {
     use crate::parse_recipe::{load_recipe_with_pal, parse_recipe, render_kdl_parse_error};
     use crate::run_spec::RunSpec;
+    use crate::{LiveDisplay, RecipeConfig};
     use expect_test::expect;
     use kdl::{KdlDiagnostic, KdlError};
     use miette::{Severity, SourceSpan};
@@ -552,6 +627,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(recipe.name, SharedString::from("default"));
+        assert_eq!(recipe.config, RecipeConfig::default());
         assert_eq!(recipe.tasks.len(), 5);
         assert_eq!(
             recipe.tasks[0].description,
@@ -592,6 +668,60 @@ mod tests {
                 .to_test_string()
                 .contains("duplicate task name `build`")
         );
+    }
+
+    #[test]
+    fn defaults_recipe_live_display_to_line_per_task() {
+        let recipe = parse_recipe(
+            r#"
+            recipe "default" {
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(recipe.config.live_display, LiveDisplay::LinePerTask);
+    }
+
+    #[test]
+    fn parses_recipe_live_display_config() {
+        let recipe = parse_recipe(
+            r#"
+            recipe "default" {
+              config live-display="single-line"
+
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(recipe.config.live_display, LiveDisplay::SingleLine);
+    }
+
+    #[test]
+    fn rejects_invalid_recipe_live_display_config() {
+        let error = parse_recipe(
+            r#"
+            recipe "default" {
+              config live-display="sideways"
+
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_test_string().contains(
+            "config live-display must be one of `single-line` or `line-per-task`, found `sideways`"
+        ));
     }
 
     #[test]

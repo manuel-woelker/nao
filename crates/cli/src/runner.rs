@@ -3,13 +3,15 @@ use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
 use nao_engine::RunEngine;
+use nao_engine::RunObserver;
 use nao_engine::RunStatus;
 use nao_engine::TaskFailure;
 use nao_pal::pal::PalHandle;
-use nao_recipe::{Task, TaskName};
+use nao_recipe::{LiveDisplay, Task, TaskName};
 use std::io::Write as _;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -53,16 +55,32 @@ impl Runner {
 
         let plan = self.engine.plan_run(recipe_path, task_names)?;
         let running_line_body = render_running_line_body(&plan.requested_tasks, plan.tasks.len());
-        let spinner = if self.pal.is_interactive_terminal() {
-            Some(RunningSpinner::start(running_line_body.clone()))
+        let mut line_per_task_display = None;
+        let single_line_display = if self.pal.is_interactive_terminal() {
+            match plan.live_display {
+                LiveDisplay::SingleLine => Some(RunningSpinner::start(running_line_body.clone())),
+                LiveDisplay::LinePerTask => {
+                    line_per_task_display = Some(LinePerTaskDisplay::start(
+                        running_line_body.clone(),
+                        &plan.tasks,
+                    ));
+                    None
+                }
+            }
         } else {
             print!("{}", render_running_line(&running_line_body));
             std::io::stdout().flush().unwrap();
             None
         };
 
-        let result = self.engine.execute_planned_run(recipe_path, &plan)?;
-        drop(spinner);
+        let result = if let Some(display) = line_per_task_display.as_mut() {
+            self.engine
+                .execute_planned_run_with_observer(recipe_path, &plan, display)?
+        } else {
+            self.engine.execute_planned_run(recipe_path, &plan)?
+        };
+        drop(single_line_display);
+        drop(line_per_task_display);
         let output = match &result.status {
             RunStatus::Completed => render_success_summary(
                 &result.goal_tasks,
@@ -262,6 +280,148 @@ impl Drop for RunningSpinner {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveTaskStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LiveTaskState {
+    name: SharedString,
+    status: LiveTaskStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LinePerTaskSnapshot {
+    header: String,
+    tasks: Vec<LiveTaskState>,
+}
+
+struct LinePerTaskDisplay {
+    stop: Arc<AtomicBool>,
+    snapshot: Arc<Mutex<LinePerTaskSnapshot>>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl LinePerTaskDisplay {
+    fn start(header: String, tasks: &[Task]) -> Self {
+        let snapshot = Arc::new(Mutex::new(LinePerTaskSnapshot {
+            header,
+            tasks: tasks
+                .iter()
+                .map(|task| LiveTaskState {
+                    name: task.name.0.clone(),
+                    status: LiveTaskStatus::Pending,
+                })
+                .collect(),
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let thread_snapshot = Arc::clone(&snapshot);
+        let handle = thread::spawn(move || {
+            const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let line_count = thread_snapshot.lock().unwrap().tasks.len() + 1;
+            let mut frame_index = 0usize;
+            let mut first_render = true;
+
+            loop {
+                let rendered = {
+                    let snapshot = thread_snapshot.lock().unwrap();
+                    render_line_per_task_display(snapshot.clone(), FRAMES[frame_index])
+                };
+
+                if first_render {
+                    print!("{rendered}");
+                    first_render = false;
+                } else {
+                    print!("\x1b[{line_count}F\x1b[J{rendered}");
+                }
+                std::io::stdout().flush().unwrap();
+
+                if thread_stop.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                frame_index = (frame_index + 1) % FRAMES.len();
+                thread::sleep(Duration::from_millis(80));
+            }
+        });
+
+        Self {
+            stop,
+            snapshot,
+            handle: Some(handle),
+        }
+    }
+
+    fn update_task(&self, task_name: &str, status: LiveTaskStatus) {
+        let mut snapshot = self.snapshot.lock().unwrap();
+        let task = snapshot
+            .tasks
+            .iter_mut()
+            .find(|task| task.name.as_str() == task_name)
+            .unwrap();
+        task.status = status;
+    }
+}
+
+impl RunObserver for LinePerTaskDisplay {
+    fn on_task_started(&mut self, task_name: &str) {
+        self.update_task(task_name, LiveTaskStatus::Running);
+    }
+
+    fn on_task_completed(&mut self, task_name: &str) {
+        self.update_task(task_name, LiveTaskStatus::Completed);
+    }
+
+    fn on_task_failed(&mut self, task_name: &str) {
+        self.update_task(task_name, LiveTaskStatus::Failed);
+    }
+
+    fn on_task_skipped(&mut self, task_name: &str) {
+        self.update_task(task_name, LiveTaskStatus::Skipped);
+    }
+}
+
+impl Drop for LinePerTaskDisplay {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            handle.join().unwrap();
+        }
+    }
+}
+
+fn render_line_per_task_display(snapshot: LinePerTaskSnapshot, running_symbol: &str) -> String {
+    let mut output = String::new();
+    let _ = writeln!(&mut output, "🚀 {}", snapshot.header);
+
+    for task in &snapshot.tasks {
+        let _ = writeln!(
+            &mut output,
+            "  {} {}",
+            render_live_task_status(task.status, running_symbol),
+            task.name.as_str()
+        );
+    }
+
+    output
+}
+
+fn render_live_task_status(status: LiveTaskStatus, running_symbol: &str) -> String {
+    match status {
+        LiveTaskStatus::Pending => "○".to_owned(),
+        LiveTaskStatus::Running => running_symbol.to_owned(),
+        LiveTaskStatus::Completed => "✅".to_owned(),
+        LiveTaskStatus::Failed => "\u{1b}[1;31m❌\u{1b}[0m".to_owned(),
+        LiveTaskStatus::Skipped => "⏭".to_owned(),
+    }
+}
+
 fn pretty_duration(duration_nanos: u128) -> String {
     if duration_nanos < 1_000 {
         return format!("{duration_nanos}ns");
@@ -277,9 +437,13 @@ fn pretty_duration(duration_nanos: u128) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::LinePerTaskSnapshot;
+    use super::LiveTaskState;
+    use super::LiveTaskStatus;
     use super::Runner;
     use super::pretty_duration;
     use super::render_failure_summary;
+    use super::render_line_per_task_display;
     use super::render_running_line;
     use super::render_running_line_body;
     use super::render_success_summary;
@@ -529,6 +693,48 @@ mod tests {
             ╰───────── fail3 output: (23 lines omitted) ─────────╯
 
             ❌ fail5 failed because fail3 failed with exit code 1 in 2.5ms after 2 tasks completed successfully
+        "#]]
+        .assert_eq(&nao_base::unansi(&rendered));
+    }
+
+    #[test]
+    fn renders_line_per_task_display() {
+        let rendered = render_line_per_task_display(
+            LinePerTaskSnapshot {
+                header: "Running test and 1 prerequisite task".to_owned(),
+                tasks: vec![
+                    LiveTaskState {
+                        name: SharedString::from("build"),
+                        status: LiveTaskStatus::Completed,
+                    },
+                    LiveTaskState {
+                        name: SharedString::from("test"),
+                        status: LiveTaskStatus::Running,
+                    },
+                    LiveTaskState {
+                        name: SharedString::from("deploy"),
+                        status: LiveTaskStatus::Pending,
+                    },
+                    LiveTaskState {
+                        name: SharedString::from("publish"),
+                        status: LiveTaskStatus::Skipped,
+                    },
+                    LiveTaskState {
+                        name: SharedString::from("cleanup"),
+                        status: LiveTaskStatus::Failed,
+                    },
+                ],
+            },
+            "⠙",
+        );
+
+        expect![[r#"
+            🚀 Running test and 1 prerequisite task
+              ✅ build
+              ⠙ test
+              ○ deploy
+              ⏭ publish
+              ❌ cleanup
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
     }

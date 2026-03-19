@@ -4,6 +4,7 @@ use crate::run_artifact_writer::TaskArtifactRecord;
 use crate::run_execution_result::RunExecutionResult;
 use crate::run_execution_result::RunStatus;
 use crate::run_execution_result::TaskFailure;
+use crate::run_observer::RunObserver;
 use crate::task_output_framer::TaskOutputFramer;
 use nao_base::err;
 use nao_base::file_path::FilePath;
@@ -64,6 +65,7 @@ impl RunEngine {
 
         Ok(PlannedRun {
             requested_tasks,
+            live_display: recipe.config.live_display,
             tasks,
         })
     }
@@ -83,6 +85,17 @@ impl RunEngine {
         &self,
         recipe_path: &FilePath,
         plan: &PlannedRun,
+    ) -> NaoResult<RunExecutionResult> {
+        let mut observer = NoopRunObserver;
+        self.execute_planned_run_with_observer(recipe_path, plan, &mut observer)
+    }
+
+    /// Executes an already planned run sequentially and emits task lifecycle updates.
+    pub fn execute_planned_run_with_observer(
+        &self,
+        recipe_path: &FilePath,
+        plan: &PlannedRun,
+        observer: &mut dyn RunObserver,
     ) -> NaoResult<RunExecutionResult> {
         let recipe_directory = recipe_path.parent().unwrap_or_else(|| FilePath::from("."));
         let recipe_directory = if recipe_directory.as_str().is_empty() {
@@ -113,6 +126,7 @@ impl RunEngine {
 
         for task in &plan.tasks {
             if failed {
+                observer.on_task_skipped(task.name.as_str());
                 task_records.push(TaskArtifactRecord {
                     name: task.name.0.clone(),
                     status: SharedString::from("skipped"),
@@ -127,6 +141,7 @@ impl RunEngine {
 
             let mut framer = TaskOutputFramer::new();
             framer.push_task_heading(task.name.as_str());
+            observer.on_task_started(task.name.as_str());
             let command = build_process_command(&recipe_directory, task)?;
             match self.pal.run_process(&command, &mut framer) {
                 Ok(result) => {
@@ -138,6 +153,7 @@ impl RunEngine {
 
                     let task_failed = result.exit_code.unwrap_or(1) != 0;
                     if task_failed {
+                        observer.on_task_failed(task.name.as_str());
                         failed = true;
                         let task_failure = TaskFailure {
                             task_name: task.name.0.clone(),
@@ -153,6 +169,7 @@ impl RunEngine {
                         failure_message = Some(render_task_failure_message(&task_failure));
                         run_status = RunStatus::Failed(task_failure);
                     } else {
+                        observer.on_task_completed(task.name.as_str());
                         successful_task_count += 1;
                     }
 
@@ -177,6 +194,7 @@ impl RunEngine {
                     }
                     output.push_str(task_output.as_str());
 
+                    observer.on_task_failed(task.name.as_str());
                     failed = true;
                     failure_message = Some(render_task_execution_error_message(
                         task.name.as_str(),
@@ -258,6 +276,10 @@ impl RunEngine {
         Ok(())
     }
 }
+
+struct NoopRunObserver;
+
+impl RunObserver for NoopRunObserver {}
 
 fn split_task_selectors(task_names: &[String]) -> Vec<String> {
     task_names
@@ -460,6 +482,7 @@ mod tests {
     use nao_pal::process_output_stream::ProcessOutputStream;
     use nao_pal::process_result::ProcessResult;
     use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
+    use nao_recipe::LiveDisplay;
     use std::time::{Duration, SystemTime};
 
     fn test_engine() -> RunEngine {
@@ -563,6 +586,30 @@ test"#
 planned=build,test"#
         ]
         .assert_eq(&rendered);
+        assert_eq!(plan.live_display, LiveDisplay::LinePerTask);
+    }
+
+    #[test]
+    fn plans_requested_live_display_mode() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              config live-display="single-line"
+
+              task "test" {
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        let engine = RunEngine::new(PalHandle::new(pal));
+        let plan = engine
+            .plan_run(&FilePath::from("nao.kdl"), &["test".to_owned()])
+            .unwrap();
+
+        assert_eq!(plan.live_display, LiveDisplay::SingleLine);
     }
 
     #[test]
@@ -786,7 +833,7 @@ planned=slow,slow1,slowpoke,fast"#
 
         expect![[r#"
             × error task specifier `slow_` did not match any tasks
-              at crates/engine/src/run_engine.rs:300:20
+              at crates/engine/src/run_engine.rs:322:20
         "#]]
         .assert_eq(&error.to_test_string());
     }
