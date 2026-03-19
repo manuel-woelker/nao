@@ -77,6 +77,8 @@ pub struct App {
     auto_follow_log: bool,
     status_message: Option<SharedString>,
     active_run: Option<ActiveRunHandle>,
+    launched_run_in_session: bool,
+    spinner_frame: usize,
 }
 
 impl App {
@@ -85,7 +87,7 @@ impl App {
         let engine = RunEngine::new(pal.clone());
         let tasks = engine.list_tasks(&recipe_path)?;
         let runs = discover_runs(&*pal, &recipe_path)?;
-        let mut app = Self {
+        let app = Self {
             pal,
             engine,
             recipe_path,
@@ -107,10 +109,9 @@ impl App {
             auto_follow_log: true,
             status_message: None,
             active_run: None,
+            launched_run_in_session: false,
+            spinner_frame: 0,
         };
-        if let Some(run_directory) = app.runs.first().map(|run| run.run_directory.clone()) {
-            app.open_run(&run_directory)?;
-        }
         Ok(app)
     }
 
@@ -131,6 +132,7 @@ impl App {
     }
 
     fn refresh(&mut self) -> NaoResult<()> {
+        self.spinner_frame = (self.spinner_frame + 1) % spinner_frames().len();
         self.refresh_active_run()?;
         if self.open_run_directory.is_some() {
             self.refresh_open_run_detail()?;
@@ -520,6 +522,7 @@ impl App {
             run_directory: run_directory.clone(),
             receiver,
         });
+        self.launched_run_in_session = true;
         self.status_message = Some(SharedString::from("run started"));
         self.open_run(&run_directory)?;
         Ok(())
@@ -571,7 +574,11 @@ impl App {
                 } else {
                     "[ ]"
                 };
-                ListItem::new(Line::from(format!("{marker} {}", task.name.as_str())))
+                ListItem::new(Line::from(format!(
+                    "{marker} {:<20} {}",
+                    task.name.as_str(),
+                    task.description.as_deref().unwrap_or("-")
+                )))
             })
             .collect::<Vec<_>>();
         let mut list_state = ListState::default();
@@ -634,7 +641,22 @@ impl App {
     }
 
     fn render_launcher_progress(&self, frame: &mut Frame<'_>, area: Rect) {
-        let text = if let Some(detail) = &self.run_detail {
+        let (title, text) = if self.launched_run_in_session {
+            ("Run Progress", self.render_launcher_progress_lines())
+        } else {
+            ("Help", self.render_launcher_help_lines())
+        };
+
+        frame.render_widget(
+            Paragraph::new(text)
+                .block(Block::default().borders(Borders::ALL).title(title))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+
+    fn render_launcher_progress_lines(&self) -> Vec<Line<'static>> {
+        if let Some(detail) = &self.run_detail {
             let mut lines = vec![
                 Line::from(format!("run: {}", detail.run_id.as_str())),
                 Line::from(format!("result: {}", detail.result.as_str())),
@@ -654,29 +676,54 @@ impl App {
                 Line::from(""),
             ];
             lines.extend(detail.tasks.iter().map(|task| {
-                let mut row = format!("{:<20} {:<10}", task.name.as_str(), task.status.as_str());
-                if let Some(exit_code) = task.exit_code {
-                    row.push_str(&format!(" exit {exit_code}"));
+                let mut row = format!(
+                    "{} {:<20}",
+                    render_task_state_emoji(task.status.as_str(), self.spinner_frame),
+                    task.name.as_str()
+                );
+                if let Some(duration_nanos) = task.duration_nanos {
+                    row.push_str(&format!("  {}", pretty_duration(duration_nanos)));
+                } else if task.status.as_str() == "running" {
+                    row.push_str("  running");
+                }
+                if task.status.as_str() == "failed"
+                    && let Some(exit_code) = task.exit_code
+                {
+                    row.push_str(&format!("  exit {exit_code}"));
                 }
                 Line::from(row)
             }));
+            if detail.result.as_str() != "running"
+                && let Some(duration_nanos) = detail.duration_nanos
+            {
+                lines.push(Line::from(""));
+                lines.push(Line::from(format!(
+                    "🏁 total {}",
+                    pretty_duration(duration_nanos)
+                )));
+            }
             if detail.tasks.is_empty() {
                 lines.push(Line::from("no tasks"));
             }
             lines
         } else {
-            vec![
-                Line::from("no run launched yet"),
-                Line::from("press Enter to start the selected task"),
-            ]
-        };
+            vec![Line::from("waiting for run data...")]
+        }
+    }
 
-        frame.render_widget(
-            Paragraph::new(text)
-                .block(Block::default().borders(Borders::ALL).title("Run Progress"))
-                .wrap(Wrap { trim: false }),
-            area,
-        );
+    fn render_launcher_help_lines(&self) -> Vec<Line<'static>> {
+        vec![
+            Line::from("  TUI usage"),
+            Line::from(""),
+            Line::from("  j / k: move through tasks"),
+            Line::from("  Space: toggle explicit goal selection"),
+            Line::from("  Enter: start selected task"),
+            Line::from("  Tab: switch pane focus"),
+            Line::from("  r: open run history"),
+            Line::from("  2: open run detail"),
+            Line::from("  ?: open help"),
+            Line::from("  q: quit"),
+        ]
     }
 
     fn render_history(&self, frame: &mut Frame<'_>) {
@@ -1048,9 +1095,37 @@ fn adjust_scroll(current: u16, delta: i32, max: u16) -> u16 {
     next.clamp(0, max as i32) as u16
 }
 
+fn spinner_frames() -> &'static [&'static str] {
+    &["⠋ ", "⠙ ", "⠹ ", "⠸ ", "⠼ ", "⠴ ", "⠦ ", "⠧ ", "⠇ ", "⠏ "]
+}
+
+fn render_task_state_emoji(status: &str, spinner_frame: usize) -> &'static str {
+    match status {
+        "pending" => "⚪",
+        "running" => spinner_frames()[spinner_frame % spinner_frames().len()],
+        "completed" => "✅",
+        "failed" => "❌",
+        "skipped" => "⏭ ",
+        _ => "⚪",
+    }
+}
+
+fn pretty_duration(duration_nanos: u128) -> String {
+    if duration_nanos < 1_000 {
+        return format!("{duration_nanos}ns");
+    }
+    if duration_nanos < 1_000_000 {
+        return format!("{:.1}us", duration_nanos as f64 / 1_000.0);
+    }
+    if duration_nanos < 1_000_000_000 {
+        return format!("{:.1}ms", duration_nanos as f64 / 1_000_000.0);
+    }
+    format!("{:.1}s", duration_nanos as f64 / 1_000_000_000.0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{App, Focus, Screen};
+    use super::{App, Focus, Screen, pretty_duration, render_task_state_emoji};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use nao_base::file_path::FilePath;
     use nao_base::timestamp::Timestamp;
@@ -1193,5 +1268,23 @@ mod tests {
         app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))
             .unwrap();
         assert_eq!(app.focus, Focus::DetailTasks);
+    }
+
+    #[test]
+    fn renders_task_state_emojis() {
+        assert_eq!(render_task_state_emoji("pending", 0), "⚪");
+        assert_eq!(render_task_state_emoji("running", 0), "⠋ ");
+        assert_eq!(render_task_state_emoji("running", 1), "⠙ ");
+        assert_eq!(render_task_state_emoji("completed", 0), "✅");
+        assert_eq!(render_task_state_emoji("failed", 0), "❌");
+        assert_eq!(render_task_state_emoji("skipped", 0), "⏭ ");
+    }
+
+    #[test]
+    fn formats_durations_for_progress_rows() {
+        assert_eq!(pretty_duration(999), "999ns");
+        assert_eq!(pretty_duration(1_200), "1.2us");
+        assert_eq!(pretty_duration(2_500_000), "2.5ms");
+        assert_eq!(pretty_duration(2_000_000_000), "2.0s");
     }
 }

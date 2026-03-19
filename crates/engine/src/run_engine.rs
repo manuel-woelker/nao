@@ -346,6 +346,12 @@ impl RunEngine {
                         status,
                         result_name,
                         result.exit_code,
+                        Some(
+                            result
+                                .finished_at
+                                .as_nanos()
+                                .saturating_sub(result.started_at.as_nanos()),
+                        ),
                     )?;
                     task_records[task_index] = Some(TaskArtifactRecord {
                         name: task.name.0.clone(),
@@ -394,6 +400,7 @@ impl RunEngine {
                         failed_at,
                         "failed",
                         "failed",
+                        None,
                         None,
                     )?;
                     task_records[task_index] = Some(TaskArtifactRecord {
@@ -1155,7 +1162,7 @@ planned=slow,slow1,slowpoke,fast"#
 
         expect![[r#"
             × error task specifier `slow_` did not match any tasks
-              at crates/engine/src/run_engine.rs:587:20
+              at crates/engine/src/run_engine.rs:594:20
         "#]]
         .assert_eq(&error.to_test_string());
     }
@@ -1243,14 +1250,14 @@ APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"task":"bu
 RUN PROCESS: ./scripts/build.sh 
 APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/build.log -> [1970-01-01T00:00:00Z] stdout: building
 
-APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"exit_code":0,"result":"success","status":"completed","task":"build","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"duration_nanos":"4","exit_code":0,"result":"success","status":"completed","task":"build","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
 
 APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_started"}
 
 RUN PROCESS: ./scripts/test.sh 
 APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/test.log -> [1970-01-01T00:00:00Z] stdout: testing
 
-APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"exit_code":0,"result":"success","status":"completed","task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"duration_nanos":"4","exit_code":0,"result":"success","status":"completed","task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
 
 APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"result":"completed","timestamp":"1970-01-01T00:00:00Z","type":"run_finished"}
 

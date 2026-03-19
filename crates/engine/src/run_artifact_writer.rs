@@ -150,6 +150,7 @@ impl RunArtifactWriter {
         status: &str,
         result: &str,
         exit_code: Option<i32>,
+        duration_nanos: Option<u128>,
     ) -> NaoResult<()> {
         self.append_event_json(&json!({
             "type": "task_finished",
@@ -162,6 +163,7 @@ impl RunArtifactWriter {
             "status": status,
             "result": result,
             "exit_code": exit_code,
+            "duration_nanos": duration_nanos.map(|duration| duration.to_string()),
         }))
     }
 

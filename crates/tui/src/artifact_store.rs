@@ -33,6 +33,8 @@ pub struct RunTaskRecord {
     pub result: SharedString,
     /// Process exit code when known.
     pub exit_code: Option<i32>,
+    /// Task duration in nanoseconds when known.
+    pub duration_nanos: Option<u128>,
     /// Task log path relative to the run directory.
     pub log_file: FilePath,
 }
@@ -52,6 +54,8 @@ pub struct RunEventRecord {
     pub result: Option<SharedString>,
     /// Exit code when applicable.
     pub exit_code: Option<i32>,
+    /// Task duration in nanoseconds when applicable.
+    pub duration_nanos: Option<u128>,
 }
 
 /// Fully parsed data for one run detail screen.
@@ -65,6 +69,8 @@ pub struct RunDetailRecord {
     pub requested_tasks: Vec<SharedString>,
     /// Current or final run result.
     pub result: SharedString,
+    /// Total run duration in nanoseconds when known.
+    pub duration_nanos: Option<u128>,
     /// Failure summary when the run failed.
     pub failure_message: Option<SharedString>,
     /// Tasks shown in the task list.
@@ -84,6 +90,7 @@ struct SummaryFile {
 #[derive(Debug, Clone, Deserialize)]
 struct SummaryRunFile {
     requested_tasks: Vec<SharedString>,
+    duration_nanos: Option<SharedString>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -92,6 +99,7 @@ struct SummaryTaskFile {
     status: SharedString,
     result: SharedString,
     exit_code: Option<i32>,
+    duration_nanos: Option<SharedString>,
     log_file: SharedString,
 }
 
@@ -119,6 +127,8 @@ struct EventFile {
     result: Option<SharedString>,
     #[serde(default)]
     exit_code: Option<i32>,
+    #[serde(default)]
+    duration_nanos: Option<SharedString>,
     #[serde(default, rename = "requested_tasks")]
     _requested_tasks: Vec<SharedString>,
 }
@@ -169,13 +179,20 @@ pub fn load_run_detail(pal: &dyn Pal, run_directory: &FilePath) -> NaoResult<Run
         .as_ref()
         .map(|summary| summary.result.clone())
         .unwrap_or_else(|| live_result_from_events(&events));
-    let failure_message = summary.and_then(|summary| summary.failure_message);
+    let failure_message = summary
+        .as_ref()
+        .and_then(|summary| summary.failure_message.clone());
+    let duration_nanos = summary
+        .as_ref()
+        .and_then(|summary| summary.run.duration_nanos.as_ref())
+        .and_then(|duration| duration.as_str().parse::<u128>().ok());
 
     Ok(RunDetailRecord {
         run_directory: run_directory.clone(),
         run_id: run_id_from_directory(run_directory),
         requested_tasks,
         result,
+        duration_nanos,
         failure_message,
         tasks,
         events,
@@ -225,6 +242,10 @@ fn build_task_records(
                 status: task.status.clone(),
                 result: task.result.clone(),
                 exit_code: task.exit_code,
+                duration_nanos: task
+                    .duration_nanos
+                    .as_ref()
+                    .and_then(|duration| duration.as_str().parse::<u128>().ok()),
                 log_file: FilePath::from(task.log_file.clone()),
             })
             .collect();
@@ -234,38 +255,46 @@ fn build_task_records(
         .map(|plan| {
             plan.tasks
                 .iter()
-                .map(|task| {
-                    (
-                        task.name.clone(),
-                        RunTaskRecord {
-                            name: task.name.clone(),
-                            status: SharedString::from("pending"),
-                            result: SharedString::from("pending"),
-                            exit_code: None,
-                            log_file: FilePath::from(format!(
-                                "{}.log",
-                                sanitize_task_name(task.name.as_str())
-                            )),
-                        },
-                    )
+                .map(|task| RunTaskRecord {
+                    name: task.name.clone(),
+                    status: SharedString::from("pending"),
+                    result: SharedString::from("pending"),
+                    exit_code: None,
+                    duration_nanos: None,
+                    log_file: FilePath::from(format!(
+                        "{}.log",
+                        sanitize_task_name(task.name.as_str())
+                    )),
                 })
-                .collect::<BTreeMap<_, _>>()
+                .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let mut task_indexes = tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| (task.name.clone(), index))
+        .collect::<BTreeMap<_, _>>();
 
     for event in events {
         let Some(task_name) = &event.task_name else {
             continue;
         };
-        let task = tasks
-            .entry(task_name.clone())
-            .or_insert_with(|| RunTaskRecord {
+        let task_index = if let Some(task_index) = task_indexes.get(task_name).copied() {
+            task_index
+        } else {
+            let task_index = tasks.len();
+            tasks.push(RunTaskRecord {
                 name: task_name.clone(),
                 status: SharedString::from("pending"),
                 result: SharedString::from("pending"),
                 exit_code: None,
+                duration_nanos: None,
                 log_file: FilePath::from(format!("{}.log", sanitize_task_name(task_name.as_str()))),
             });
+            task_indexes.insert(task_name.clone(), task_index);
+            task_index
+        };
+        let task = &mut tasks[task_index];
         match event.event_type.as_str() {
             "task_started" => {
                 task.status = SharedString::from("running");
@@ -278,6 +307,7 @@ fn build_task_records(
                     .unwrap_or_else(|| SharedString::from("completed"));
                 task.result = event.result.clone().unwrap_or_else(|| task.status.clone());
                 task.exit_code = event.exit_code;
+                task.duration_nanos = event.duration_nanos;
             }
             "task_skipped" => {
                 task.status = SharedString::from("skipped");
@@ -287,7 +317,7 @@ fn build_task_records(
         }
     }
 
-    tasks.into_values().collect()
+    tasks
 }
 
 fn read_summary_file(pal: &dyn Pal, run_directory: &FilePath) -> NaoResult<Option<SummaryFile>> {
@@ -333,6 +363,10 @@ fn read_events_file(pal: &dyn Pal, run_directory: &FilePath) -> NaoResult<Vec<Ru
                 status: event.status,
                 result: event.result,
                 exit_code: event.exit_code,
+                duration_nanos: event
+                    .duration_nanos
+                    .as_ref()
+                    .and_then(|duration| duration.as_str().parse::<u128>().ok()),
             }),
             Err(error) => {
                 let is_last_line = index + 1 == content.lines().count();
