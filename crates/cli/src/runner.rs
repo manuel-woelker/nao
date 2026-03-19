@@ -493,11 +493,11 @@ fn render_single_line_display(snapshot: LiveTaskSnapshot) -> String {
 
 fn render_live_task_status(status: LiveTaskStatus, running_symbol: &str) -> String {
     match status {
-        LiveTaskStatus::Pending => "○".to_owned(),
-        LiveTaskStatus::Running => running_symbol.to_owned(),
+        LiveTaskStatus::Pending => "○ ".to_owned(),
+        LiveTaskStatus::Running => format!("{running_symbol} "),
         LiveTaskStatus::Completed => "✅".to_owned(),
         LiveTaskStatus::Failed => "\u{1b}[1;31m❌\u{1b}[0m".to_owned(),
-        LiveTaskStatus::Skipped => "⏭".to_owned(),
+        LiveTaskStatus::Skipped => "⏭ ".to_owned(),
     }
 }
 
@@ -811,9 +811,9 @@ mod tests {
         expect![[r#"
             🚀 Running test and 1 prerequisite task
               ✅ build
-              ⠙ test
-              ⠙ lint
-              ⏭ publish
+              ⠙  test
+              ⠙  lint
+              ⏭  publish
               ❌ cleanup
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
