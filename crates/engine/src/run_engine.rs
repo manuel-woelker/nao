@@ -641,7 +641,7 @@ fn render_task_failure_message(task_failure: &TaskFailure) -> String {
 fn task_output_omitted_line_count(
     log_lines: &[(nao_base::timestamp::Timestamp, ProcessOutputStream, String)],
 ) -> usize {
-    log_lines.len().saturating_sub(100)
+    log_lines.len().saturating_sub(200)
 }
 
 fn task_output_tail_lines(
@@ -649,7 +649,7 @@ fn task_output_tail_lines(
 ) -> Vec<SharedString> {
     log_lines
         .iter()
-        .skip(log_lines.len().saturating_sub(100))
+        .skip(log_lines.len().saturating_sub(200))
         .map(|(_, _, line)| SharedString::from(line.as_str()))
         .collect()
 }

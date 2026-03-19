@@ -897,7 +897,14 @@ impl App {
                     "Task Output",
                     self.focus == Focus::DetailOutput,
                 ))
-                .scroll((self.log_scroll, 0))
+                .scroll((
+                    clamp_scroll_for_viewport(
+                        self.log_scroll,
+                        self.task_log_lines.len(),
+                        area.height,
+                    ),
+                    0,
+                ))
                 .wrap(Wrap { trim: false }),
             area,
         );
@@ -1093,6 +1100,14 @@ fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
 fn adjust_scroll(current: u16, delta: i32, max: u16) -> u16 {
     let next = current as i32 + delta;
     next.clamp(0, max as i32) as u16
+}
+
+fn clamp_scroll_for_viewport(current: u16, line_count: usize, area_height: u16) -> u16 {
+    let visible_lines = area_height.saturating_sub(2) as usize;
+    let max_scroll = line_count
+        .saturating_sub(visible_lines)
+        .min(u16::MAX as usize) as u16;
+    current.min(max_scroll)
 }
 
 fn spinner_frames() -> &'static [&'static str] {

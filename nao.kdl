@@ -91,9 +91,9 @@ recipe "default" {
     """
   }
 
-  task "shortfail" description="Print 20 lines and fail" {
+  task "shortfail" description="Print 200 lines and fail" {
     run shell="""
-      for i in $(seq 1 20); do
+      for i in $(seq 1 200); do
         printf 'shortfail line %02d: this task fails after a shorter output block\n' "$i"
       done
       exit 1
