@@ -1,3 +1,4 @@
+use crate::live_task_artifact_sink::LiveTaskArtifactSink;
 use crate::planned_run::PlannedRun;
 use crate::run_artifact_writer::RunArtifactWriter;
 use crate::run_artifact_writer::TaskArtifactRecord;
@@ -6,7 +7,6 @@ use crate::run_execution_result::RunStatus;
 use crate::run_execution_result::TaskFailure;
 use crate::run_observer::RunObserver;
 use crate::task_event_record::TaskEventRecord;
-use crate::task_output_framer::TaskOutputFramer;
 use crate::task_run_state::TaskRunState;
 use nao_base::err;
 use nao_base::file_path::FilePath;
@@ -166,12 +166,14 @@ impl RunEngine {
             run_started_system_time,
         );
         writer.write_plan(plan)?;
-        let (output, task_records, task_events, run_status, failure_message) = self
+        writer.write_run_started(plan)?;
+        let (output, task_records, _task_events, run_status, failure_message) = self
             .execute_planned_run_with_scheduler(
                 &recipe_directory,
                 plan,
                 observer,
                 run_started_at,
+                &writer,
             )?;
 
         let run_finished_at = self.pal.now();
@@ -183,7 +185,6 @@ impl RunEngine {
         writer.write_completion(
             plan,
             &task_records,
-            &task_events,
             run_finished_at,
             overall_result,
             failure_message.as_deref(),
@@ -211,6 +212,7 @@ impl RunEngine {
         plan: &PlannedRun,
         observer: &mut dyn RunObserver,
         run_started_at: Timestamp,
+        writer: &RunArtifactWriter,
     ) -> NaoResult<TaskRunArtifacts> {
         let max_parallel_tasks = plan.max_parallel_tasks.max(1);
         let (dependents, mut remaining_prerequisites) = build_dependency_graph(&plan.tasks)?;
@@ -250,13 +252,15 @@ impl RunEngine {
                     task_name: task.name.0.clone(),
                     timestamp: self.pal.now(),
                 });
+                writer.append_task_started(task.name.as_str(), self.pal.now())?;
 
                 let worker_sender = sender.clone();
                 let pal = self.pal.clone();
                 let worker_recipe_directory = recipe_directory.clone();
+                let worker_writer = writer.clone();
                 join_handles.push(thread::spawn(move || {
                     let (task_output, log_lines, execution_result) =
-                        execute_task(pal, worker_recipe_directory, task);
+                        execute_task(pal, worker_recipe_directory, task, worker_writer);
                     worker_sender
                         .send((task_index, task_output, log_lines, execution_result))
                         .unwrap();
@@ -336,6 +340,13 @@ impl RunEngine {
                         result: SharedString::from(result_name),
                         exit_code: result.exit_code,
                     });
+                    writer.append_task_finished(
+                        task.name.as_str(),
+                        result.finished_at,
+                        status,
+                        result_name,
+                        result.exit_code,
+                    )?;
                     task_records[task_index] = Some(TaskArtifactRecord {
                         name: task.name.0.clone(),
                         status: SharedString::from(status),
@@ -378,6 +389,13 @@ impl RunEngine {
                         result: SharedString::from("failed"),
                         exit_code: None,
                     });
+                    writer.append_task_finished(
+                        task.name.as_str(),
+                        failed_at,
+                        "failed",
+                        "failed",
+                        None,
+                    )?;
                     task_records[task_index] = Some(TaskArtifactRecord {
                         name: task.name.0.clone(),
                         status: SharedString::from("failed"),
@@ -408,6 +426,7 @@ impl RunEngine {
                     task_name: task.name.0.clone(),
                     timestamp: skipped_at,
                 });
+                writer.append_task_skipped(task.name.as_str(), skipped_at)?;
                 task_records[task_index] = Some(skipped_task_record(task, skipped_at));
             }
         }
@@ -463,9 +482,9 @@ fn execute_task(
     pal: PalHandle,
     recipe_directory: FilePath,
     task: Task,
+    writer: RunArtifactWriter,
 ) -> (SharedString, TaskLogLines, TaskExecutionResult) {
-    let mut framer = TaskOutputFramer::new();
-    framer.push_task_heading(task.name.as_str());
+    let mut framer = LiveTaskArtifactSink::new(writer, task.name.0.clone());
 
     let execution_result = match build_process_command(&recipe_directory, &task) {
         Ok(command) => pal
@@ -1136,7 +1155,7 @@ planned=slow,slow1,slowpoke,fast"#
 
         expect![[r#"
             × error task specifier `slow_` did not match any tasks
-              at crates/engine/src/run_engine.rs:568:20
+              at crates/engine/src/run_engine.rs:587:20
         "#]]
         .assert_eq(&error.to_test_string());
     }
@@ -1217,18 +1236,23 @@ WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-plan.json -> {
     }
   ]
 }
-RUN PROCESS: ./scripts/build.sh 
-RUN PROCESS: ./scripts/test.sh 
-WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/build.log -> [1970-01-01T00:00:00Z] stdout: building
-
-WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/test.log -> [1970-01-01T00:00:00Z] stdout: testing
-
 WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"requested_tasks":["test"],"timestamp":"1970-01-01T00:00:00Z","type":"run_started"}
-{"task":"build","timestamp":"1970-01-01T00:00:00Z","type":"task_started"}
-{"exit_code":0,"result":"success","status":"completed","task":"build","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
-{"task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_started"}
-{"exit_code":0,"result":"success","status":"completed","task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
-{"result":"completed","timestamp":"1970-01-01T00:00:00Z","type":"run_finished"}
+
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"task":"build","timestamp":"1970-01-01T00:00:00Z","type":"task_started"}
+
+RUN PROCESS: ./scripts/build.sh 
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/build.log -> [1970-01-01T00:00:00Z] stdout: building
+
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"exit_code":0,"result":"success","status":"completed","task":"build","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
+
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_started"}
+
+RUN PROCESS: ./scripts/test.sh 
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/test.log -> [1970-01-01T00:00:00Z] stdout: testing
+
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"exit_code":0,"result":"success","status":"completed","task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
+
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"result":"completed","timestamp":"1970-01-01T00:00:00Z","type":"run_finished"}
 
 WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-summary.json -> {
   "failure_message": null,

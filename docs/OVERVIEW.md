@@ -53,6 +53,17 @@ In addition to parallel execution and dependency awareness, `nao` focuses on:
 
 These features matter both for developer productivity and for reliable automation.
 
+# How can users inspect active and historical runs?
+
+`nao` now supports two terminal-facing workflows:
+
+- the CLI for direct command execution and concise summaries
+- the `nao --tui` full-screen interface for browsing tasks, live runs, and historical runs
+
+The TUI is artifact-centric. It launches runs through the same engine, reads `.nao/runs` as the source of truth for completed runs, and follows `nao-events.jsonl` plus per-task log files while a run is still active.
+
+This keeps the interaction model consistent. A run that starts in the TUI remains browsable in the same detail view after completion because the live and historical views are both driven by the same artifact layout.
+
 # How does failure handling work?
 
 `nao` supports two execution modes:

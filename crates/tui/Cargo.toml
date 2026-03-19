@@ -1,8 +1,8 @@
 [package]
-name = "nao"
+name = "nao-tui"
 version = "0.1.0"
 edition = "2024"
-description = "CLI for the nao task runner"
+description = "Terminal UI for the nao task runner"
 license = "MIT"
 repository = "https://github.com/manuel-woelker/nao"
 
@@ -11,8 +11,10 @@ nao-base = { path = "../base" }
 nao-engine = { path = "../engine" }
 nao-pal = { path = "../pal" }
 nao-recipe = { path = "../recipe" }
-nao-tui = { path = "../tui" }
-xflags = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 expect-test = { workspace = true }

@@ -11,6 +11,7 @@ use std::process::ExitCode;
 xflags::xflags! {
     cmd nao {
         optional --list
+        optional --tui
         optional --config config: PathBuf
         repeated task_name: String
     }
@@ -31,6 +32,17 @@ fn main() -> ExitCode {
 
 fn run() -> NaoResult<ExitCode> {
     let flags = Nao::from_env().map_err(|error| err!("{error}"))?;
+
+    if flags.tui {
+        validate_tui_flags(&flags)?;
+        let recipe_path = flags
+            .config
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("nao.kdl"));
+        nao_tui::run(PalReal::new_handle(), FilePath::new(&recipe_path))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     let recipe_path = flags.config.unwrap_or_else(|| PathBuf::from("nao.kdl"));
     let runner = Runner::new(PalReal::new_handle());
     let output = runner.execute(&FilePath::new(&recipe_path), flags.list, &flags.task_name)?;
@@ -39,9 +51,20 @@ fn run() -> NaoResult<ExitCode> {
     Ok(output.exit_code)
 }
 
+fn validate_tui_flags(flags: &Nao) -> NaoResult<()> {
+    if flags.list {
+        return Err(err!("--tui cannot be combined with --list"));
+    }
+    if !flags.task_name.is_empty() {
+        return Err(err!("--tui cannot be combined with task names"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::Nao;
+    use super::validate_tui_flags;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -65,5 +88,40 @@ mod tests {
 
         assert_eq!(flags.config, None);
         assert!(flags.list);
+    }
+
+    #[test]
+    fn parses_tui_flag() {
+        let flags = Nao::from_vec(vec![OsString::from("--tui")]).unwrap();
+
+        assert!(flags.tui);
+        assert_eq!(flags.config, None);
+        assert!(flags.task_name.is_empty());
+    }
+
+    #[test]
+    fn rejects_list_with_tui() {
+        let flags = Nao::from_vec(vec![OsString::from("--tui"), OsString::from("--list")]).unwrap();
+
+        let error = validate_tui_flags(&flags).unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("--tui cannot be combined with --list")
+        );
+    }
+
+    #[test]
+    fn rejects_task_names_with_tui() {
+        let flags = Nao::from_vec(vec![OsString::from("--tui"), OsString::from("build")]).unwrap();
+
+        let error = validate_tui_flags(&flags).unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("--tui cannot be combined with task names")
+        );
     }
 }

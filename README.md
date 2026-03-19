@@ -20,6 +20,39 @@ A task can be a shell command, a Bash script, a container invocation, or another
 
 See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for the higher-level project overview.
 
+## How can I use the TUI?
+
+`nao` includes a full-screen terminal UI behind the `--tui` flag.
+Run it from a repository root that contains `nao.kdl` with:
+
+```bash
+cargo run -p nao -- --tui
+```
+
+Or point it at a different recipe file:
+
+```bash
+cargo run -p nao -- --tui --config path/to/nao.kdl
+```
+
+The first version provides:
+
+- a task launcher for choosing one or more goal tasks
+- a run detail screen for live and completed runs
+- a run history screen backed by `.nao/runs`
+- task log, event stream, and summary browsing without leaving the TUI
+
+Key bindings:
+
+- `1`, `2`, `3` switch between launcher, run detail, and history
+- `Tab` and `Shift-Tab` cycle pane focus
+- `j` and `k` move the current selection or scroll the focused pane
+- `Space` toggles launcher task selection
+- `Enter` starts a run from the launcher or opens a run from history
+- `t`, `o`, `e`, and `s` focus tasks, output, events, and summary in run detail
+- `L` toggles log auto-follow for active runs
+- `?` opens help and `q` exits
+
 ## How can I use the devcontainer?
 
 This repository includes a checked-in devcontainer under [`.devcontainer/devcontainer.json`](.devcontainer/devcontainer.json).

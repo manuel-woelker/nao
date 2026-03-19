@@ -55,6 +55,9 @@ pub trait Pal: Debug + Sync + Send + 'static {
     /// Write a full file, replacing any previous contents.
     fn write_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()>;
 
+    /// Append bytes to a file, creating it if it does not exist.
+    fn append_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()>;
+
     /// Returns whether normal process output targets an interactive terminal.
     fn is_interactive_terminal(&self) -> bool;
 

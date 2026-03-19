@@ -42,6 +42,16 @@ impl TaskOutputFramer {
         (SharedString::from(self.output), self.log_lines)
     }
 
+    /// Returns the number of rendered task log lines collected so far.
+    pub fn log_lines_len(&self) -> usize {
+        self.log_lines.len()
+    }
+
+    /// Returns the log lines rendered since the provided index.
+    pub fn log_lines_since(&self, start: usize) -> &[(Timestamp, ProcessOutputStream, String)] {
+        &self.log_lines[start..]
+    }
+
     fn handle_output_event(&mut self, event: ProcessOutputEvent) {
         let buffer = match event.stream {
             ProcessOutputStream::Stdout => &mut self.stdout_buffer,

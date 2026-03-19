@@ -1,3 +1,4 @@
+mod live_task_artifact_sink;
 pub mod planned_run;
 pub mod run_artifact_writer;
 pub mod run_engine;

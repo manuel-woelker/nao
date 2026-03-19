@@ -21,6 +21,7 @@ use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use std::fmt::Debug;
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -304,6 +305,22 @@ impl Pal for PalReal {
     fn write_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()> {
         std::fs::write(self.resolve_process_path(path)?, content)
             .with_context(|| format!("Unable to write file '{}'", path))?;
+        Ok(())
+    }
+
+    fn append_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()> {
+        let resolved_path = self.resolve_process_path(path)?;
+        if let Some(parent) = resolved_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Unable to create parent directory for '{}'", path))?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&resolved_path)
+            .with_context(|| format!("Unable to open file '{}' for append", path))?;
+        std::io::Write::write_all(&mut file, content)
+            .with_context(|| format!("Unable to append file '{}'", path))?;
         Ok(())
     }
 

@@ -1,5 +1,4 @@
 use crate::planned_run::PlannedRun;
-use crate::task_event_record::TaskEventRecord;
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
@@ -13,6 +12,7 @@ use std::time::{Duration, SystemTime};
 use time::OffsetDateTime;
 
 /// Writes `.nao/runs` artifacts for one executed run.
+#[derive(Clone)]
 pub struct RunArtifactWriter {
     pal: PalHandle,
     run_root_directory: FilePath,
@@ -59,10 +59,25 @@ impl RunArtifactWriter {
         Self {
             pal,
             run_root_directory,
-            run_directory,
+            run_directory: run_directory.clone(),
             run_started_at,
             run_started_system_time,
         }
+    }
+
+    /// Predicts the run directory for a run that starts at the provided time.
+    pub fn preview_run_directory(
+        recipe_directory: &FilePath,
+        requested_task_names: &[String],
+        run_started_system_time: SystemTime,
+    ) -> FilePath {
+        let run_root_directory = recipe_directory.join(".nao").join("runs").normalize();
+        let run_directory_name = format!(
+            "{}-{}",
+            format_file_safe_iso8601(run_started_system_time),
+            sanitize_file_component(&requested_task_names.join("+"))
+        );
+        run_root_directory.join(run_directory_name).normalize()
     }
 
     /// Returns the run directory for this execution.
@@ -93,43 +108,127 @@ impl RunArtifactWriter {
         Ok(())
     }
 
+    /// Writes the initial run-start event so browsers can open the run while it is active.
+    pub fn write_run_started(&self, planned_run: &PlannedRun) -> NaoResult<()> {
+        self.pal.write_file(
+            &self.run_directory.join("nao-events.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::to_string(&json!({
+                    "type": "run_started",
+                    "timestamp": format_iso8601(self.run_started_system_time),
+                    "requested_tasks": planned_run
+                        .requested_tasks
+                        .iter()
+                        .map(|task| task.as_str())
+                        .collect::<Vec<_>>(),
+                }))?
+            )
+            .as_bytes(),
+        )?;
+        Ok(())
+    }
+
+    /// Appends a task start event.
+    pub fn append_task_started(&self, task_name: &str, timestamp: Timestamp) -> NaoResult<()> {
+        self.append_event_json(&json!({
+            "type": "task_started",
+            "timestamp": format_iso8601(absolute_system_time(
+                self.run_started_system_time,
+                self.run_started_at,
+                timestamp,
+            )),
+            "task": task_name,
+        }))
+    }
+
+    /// Appends a task finish event.
+    pub fn append_task_finished(
+        &self,
+        task_name: &str,
+        timestamp: Timestamp,
+        status: &str,
+        result: &str,
+        exit_code: Option<i32>,
+    ) -> NaoResult<()> {
+        self.append_event_json(&json!({
+            "type": "task_finished",
+            "timestamp": format_iso8601(absolute_system_time(
+                self.run_started_system_time,
+                self.run_started_at,
+                timestamp,
+            )),
+            "task": task_name,
+            "status": status,
+            "result": result,
+            "exit_code": exit_code,
+        }))
+    }
+
+    /// Appends a task skipped event.
+    pub fn append_task_skipped(&self, task_name: &str, timestamp: Timestamp) -> NaoResult<()> {
+        self.append_event_json(&json!({
+            "type": "task_skipped",
+            "timestamp": format_iso8601(absolute_system_time(
+                self.run_started_system_time,
+                self.run_started_at,
+                timestamp,
+            )),
+            "task": task_name,
+        }))
+    }
+
+    /// Appends a rendered task log line to the per-task log file.
+    pub fn append_task_log_line(
+        &self,
+        task_name: &SharedString,
+        timestamp: Timestamp,
+        stream: ProcessOutputStream,
+        line: &str,
+    ) -> NaoResult<()> {
+        let stream_name = match stream {
+            ProcessOutputStream::Stdout => "stdout",
+            ProcessOutputStream::Stderr => "stderr",
+        };
+        self.pal.append_file(
+            &self.task_log_path(task_name.as_str()),
+            format!(
+                "[{}] {}: {}\n",
+                format_iso8601(absolute_system_time(
+                    self.run_started_system_time,
+                    self.run_started_at,
+                    timestamp,
+                )),
+                stream_name,
+                line
+            )
+            .as_bytes(),
+        )?;
+        Ok(())
+    }
+
     /// Writes task logs, event lines, and the final run summary.
     pub fn write_completion(
         &self,
         planned_run: &PlannedRun,
         task_records: &[TaskArtifactRecord],
-        task_events: &[TaskEventRecord],
         run_finished_at: Timestamp,
         overall_result: &str,
         failure_message: Option<&str>,
     ) -> NaoResult<()> {
         for task_record in task_records {
-            self.pal.write_file(
-                &self.run_directory.join(format!(
-                    "{}.log",
-                    sanitize_file_component(task_record.name.as_str())
-                )),
-                render_task_log(
-                    self.run_started_system_time,
-                    self.run_started_at,
-                    &task_record.log_lines,
-                )
-                .as_bytes(),
-            )?;
+            self.ensure_task_log_file(task_record)?;
         }
 
-        self.pal.write_file(
-            &self.run_directory.join("nao-events.jsonl"),
-            render_events_jsonl(
+        self.append_event_json(&json!({
+            "type": "run_finished",
+            "timestamp": format_iso8601(absolute_system_time(
                 self.run_started_system_time,
                 self.run_started_at,
-                planned_run,
-                task_events,
                 run_finished_at,
-                overall_result,
-            )
-            .as_bytes(),
-        )?;
+            )),
+            "result": overall_result,
+        }))?;
 
         self.pal.write_file(
             &self.run_directory.join("nao-summary.json"),
@@ -183,6 +282,35 @@ impl RunArtifactWriter {
             .as_slice(),
         )?;
 
+        Ok(())
+    }
+
+    fn task_log_path(&self, task_name: &str) -> FilePath {
+        self.run_directory
+            .join(format!("{}.log", sanitize_file_component(task_name)))
+    }
+
+    fn append_event_json(&self, value: &serde_json::Value) -> NaoResult<()> {
+        self.pal.append_file(
+            &self.run_directory.join("nao-events.jsonl"),
+            format!("{}\n", serde_json::to_string(value)?).as_bytes(),
+        )?;
+        Ok(())
+    }
+
+    fn ensure_task_log_file(&self, task_record: &TaskArtifactRecord) -> NaoResult<()> {
+        let path = self.task_log_path(task_record.name.as_str());
+        if !self.pal.file_exists(&path)? {
+            self.pal.write_file(
+                &path,
+                render_task_log(
+                    self.run_started_system_time,
+                    self.run_started_at,
+                    &task_record.log_lines,
+                )
+                .as_bytes(),
+            )?;
+        }
         Ok(())
     }
 }
@@ -247,100 +375,6 @@ fn render_task_log(
         ));
     }
     rendered
-}
-
-fn render_events_jsonl(
-    run_started_system_time: SystemTime,
-    run_started_at: Timestamp,
-    planned_run: &PlannedRun,
-    task_events: &[TaskEventRecord],
-    run_finished_at: Timestamp,
-    overall_result: &str,
-) -> String {
-    let mut lines = Vec::new();
-    lines.push(
-        serde_json::to_string(&json!({
-            "type": "run_started",
-            "timestamp": format_iso8601(run_started_system_time),
-            "requested_tasks": planned_run
-                .requested_tasks
-                .iter()
-                .map(|task| task.as_str())
-                .collect::<Vec<_>>(),
-        }))
-        .unwrap(),
-    );
-
-    for task_event in task_events {
-        match task_event {
-            TaskEventRecord::Started {
-                task_name,
-                timestamp,
-            } => lines.push(
-                serde_json::to_string(&json!({
-                    "type": "task_started",
-                    "timestamp": format_iso8601(absolute_system_time(
-                        run_started_system_time,
-                        run_started_at,
-                        *timestamp,
-                    )),
-                    "task": task_name.as_str(),
-                }))
-                .unwrap(),
-            ),
-            TaskEventRecord::Finished {
-                task_name,
-                timestamp,
-                status,
-                result,
-                exit_code,
-            } => lines.push(
-                serde_json::to_string(&json!({
-                    "type": "task_finished",
-                    "timestamp": format_iso8601(absolute_system_time(
-                        run_started_system_time,
-                        run_started_at,
-                        *timestamp,
-                    )),
-                    "task": task_name.as_str(),
-                    "status": status.as_str(),
-                    "result": result.as_str(),
-                    "exit_code": exit_code,
-                }))
-                .unwrap(),
-            ),
-            TaskEventRecord::Skipped {
-                task_name,
-                timestamp,
-            } => lines.push(
-                serde_json::to_string(&json!({
-                    "type": "task_skipped",
-                    "timestamp": format_iso8601(absolute_system_time(
-                        run_started_system_time,
-                        run_started_at,
-                        *timestamp,
-                    )),
-                    "task": task_name.as_str(),
-                }))
-                .unwrap(),
-            ),
-        }
-    }
-
-    lines.push(
-        serde_json::to_string(&json!({
-            "type": "run_finished",
-            "timestamp": format_iso8601(absolute_system_time(
-                run_started_system_time,
-                run_started_at,
-                run_finished_at,
-            )),
-            "result": overall_result,
-        }))
-        .unwrap(),
-    );
-
-    lines.join("\n") + "\n"
 }
 
 fn absolute_system_time(

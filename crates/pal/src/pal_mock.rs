@@ -189,6 +189,21 @@ impl Pal for PalMock {
         Ok(())
     }
 
+    fn append_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()> {
+        self.log_effect(format!(
+            "APPEND FILE: {} -> {}",
+            path,
+            String::from_utf8_lossy(content)
+        ));
+        self.inner
+            .write()
+            .file_map
+            .entry(path.clone())
+            .and_modify(|existing| existing.extend_from_slice(content))
+            .or_insert_with(|| content.to_vec());
+        Ok(())
+    }
+
     fn is_interactive_terminal(&self) -> bool {
         self.inner.read().interactive_terminal
     }
