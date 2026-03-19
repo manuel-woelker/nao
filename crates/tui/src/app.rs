@@ -522,8 +522,6 @@ impl App {
         });
         self.status_message = Some(SharedString::from("run started"));
         self.open_run(&run_directory)?;
-        self.screen = Screen::RunDetail;
-        self.focus = Focus::DetailTasks;
         Ok(())
     }
 
@@ -560,6 +558,10 @@ impl App {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(layout[1]);
+        let left = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+            .split(body[0]);
         let items = self
             .tasks
             .iter()
@@ -582,7 +584,7 @@ impl App {
                 self.focus == Focus::LauncherTasks,
             ))
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        StatefulWidget::render(list, body[0], frame.buffer_mut(), &mut list_state);
+        StatefulWidget::render(list, left[0], frame.buffer_mut(), &mut list_state);
 
         let details_text = if let Some(task) = self.tasks.get(self.selected_task_index) {
             vec![
@@ -613,7 +615,8 @@ impl App {
                 self.focus == Focus::LauncherDetails,
             ))
             .wrap(Wrap { trim: false });
-        frame.render_widget(details, body[1]);
+        frame.render_widget(details, left[1]);
+        self.render_launcher_progress(frame, body[1]);
 
         let selected_goals = if self.selected_goals.is_empty() {
             "-".to_owned()
@@ -628,6 +631,52 @@ impl App {
             "Selected goals: {selected_goals} | Space toggle | Enter start run | r history | ? help | q quit"
         );
         self.render_footer(frame, layout[2], &footer_text);
+    }
+
+    fn render_launcher_progress(&self, frame: &mut Frame<'_>, area: Rect) {
+        let text = if let Some(detail) = &self.run_detail {
+            let mut lines = vec![
+                Line::from(format!("run: {}", detail.run_id.as_str())),
+                Line::from(format!("result: {}", detail.result.as_str())),
+                Line::from(format!(
+                    "goals: {}",
+                    if detail.requested_tasks.is_empty() {
+                        "-".to_owned()
+                    } else {
+                        detail
+                            .requested_tasks
+                            .iter()
+                            .map(|task| task.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                )),
+                Line::from(""),
+            ];
+            lines.extend(detail.tasks.iter().map(|task| {
+                let mut row = format!("{:<20} {:<10}", task.name.as_str(), task.status.as_str());
+                if let Some(exit_code) = task.exit_code {
+                    row.push_str(&format!(" exit {exit_code}"));
+                }
+                Line::from(row)
+            }));
+            if detail.tasks.is_empty() {
+                lines.push(Line::from("no tasks"));
+            }
+            lines
+        } else {
+            vec![
+                Line::from("no run launched yet"),
+                Line::from("press Enter to start the selected task"),
+            ]
+        };
+
+        frame.render_widget(
+            Paragraph::new(text)
+                .block(Block::default().borders(Borders::ALL).title("Run Progress"))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
     }
 
     fn render_history(&self, frame: &mut Frame<'_>) {
@@ -1004,25 +1053,87 @@ mod tests {
     use super::{App, Focus, Screen};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use nao_base::file_path::FilePath;
+    use nao_base::timestamp::Timestamp;
     use nao_pal::pal::PalHandle;
     use nao_pal::pal_mock::PalMock;
+    use nao_pal::process_command::ProcessCommand;
+    use nao_pal::process_event::ProcessEvent;
+    use nao_pal::process_exited_event::ProcessExitedEvent;
+    use nao_pal::process_result::ProcessResult;
+    use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
+    use std::time::SystemTime;
 
     fn test_app() -> App {
         let pal = PalMock::new();
+        pal.set_current_system_time(SystemTime::UNIX_EPOCH);
         pal.set_file(
             "nao.kdl",
             r#"
             recipe "default" {
               task "build" description="Build" {
-                run shell="echo build"
+                run script="./scripts/build.sh"
               }
 
               task "test" description="Test" {
                 depends-on "build"
-                run shell="echo test"
+                run script="./scripts/test.sh"
               }
             }
             "#,
+        );
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "./scripts/build.sh".into(),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(1),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(2),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(3),
+                    exit_code: Some(0),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(3),
+                exit_code: Some(0),
+            },
+        );
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "./scripts/test.sh".into(),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(4),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(5),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(6),
+                    exit_code: Some(0),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(3),
+                finished_at: Timestamp::new(6),
+                exit_code: Some(0),
+            },
         );
         App::new(PalHandle::new(pal), FilePath::from("nao.kdl")).unwrap()
     }
@@ -1057,6 +1168,16 @@ mod tests {
         app.selected_goals.insert("test".into());
 
         assert_eq!(app.launcher_goal_tasks(), vec!["test".to_owned()]);
+    }
+
+    #[test]
+    fn launching_keeps_the_launcher_screen_active() {
+        let mut app = test_app();
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+
+        assert_eq!(app.screen, Screen::Launcher);
+        assert!(app.active_run.is_some());
     }
 
     #[test]
