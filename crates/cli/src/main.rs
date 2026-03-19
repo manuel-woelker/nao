@@ -33,8 +33,8 @@ fn main() -> ExitCode {
 fn run() -> NaoResult<ExitCode> {
     let flags = Nao::from_env().map_err(|error| err!("{error}"))?;
 
-    if flags.tui {
-        validate_tui_flags(&flags)?;
+    if should_run_tui(&flags) {
+        validate_tui_request(&flags)?;
         let recipe_path = flags
             .config
             .clone()
@@ -51,7 +51,11 @@ fn run() -> NaoResult<ExitCode> {
     Ok(output.exit_code)
 }
 
-fn validate_tui_flags(flags: &Nao) -> NaoResult<()> {
+fn should_run_tui(flags: &Nao) -> bool {
+    flags.tui || (!flags.list && flags.task_name.is_empty())
+}
+
+fn validate_tui_request(flags: &Nao) -> NaoResult<()> {
     if flags.list {
         return Err(err!("--tui cannot be combined with --list"));
     }
@@ -64,7 +68,8 @@ fn validate_tui_flags(flags: &Nao) -> NaoResult<()> {
 #[cfg(test)]
 mod tests {
     use super::Nao;
-    use super::validate_tui_flags;
+    use super::should_run_tui;
+    use super::validate_tui_request;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -103,7 +108,7 @@ mod tests {
     fn rejects_list_with_tui() {
         let flags = Nao::from_vec(vec![OsString::from("--tui"), OsString::from("--list")]).unwrap();
 
-        let error = validate_tui_flags(&flags).unwrap_err();
+        let error = validate_tui_request(&flags).unwrap_err();
 
         assert!(
             error
@@ -116,12 +121,33 @@ mod tests {
     fn rejects_task_names_with_tui() {
         let flags = Nao::from_vec(vec![OsString::from("--tui"), OsString::from("build")]).unwrap();
 
-        let error = validate_tui_flags(&flags).unwrap_err();
+        let error = validate_tui_request(&flags).unwrap_err();
 
         assert!(
             error
                 .to_test_string()
                 .contains("--tui cannot be combined with task names")
         );
+    }
+
+    #[test]
+    fn defaults_to_tui_when_no_action_is_given() {
+        let flags = Nao::from_vec(Vec::<OsString>::new()).unwrap();
+
+        assert!(should_run_tui(&flags));
+    }
+
+    #[test]
+    fn does_not_default_to_tui_when_listing_tasks() {
+        let flags = Nao::from_vec(vec![OsString::from("--list")]).unwrap();
+
+        assert!(!should_run_tui(&flags));
+    }
+
+    #[test]
+    fn does_not_default_to_tui_when_tasks_are_requested() {
+        let flags = Nao::from_vec(vec![OsString::from("build")]).unwrap();
+
+        assert!(!should_run_tui(&flags));
     }
 }

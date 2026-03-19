@@ -460,19 +460,30 @@ impl App {
             self.status_message = Some(SharedString::from("a run is already active"));
             return Ok(());
         }
-        let goal_tasks = self
-            .selected_goals
-            .iter()
-            .map(|task| task.as_str().to_owned())
-            .collect::<Vec<_>>();
+        let goal_tasks = self.launcher_goal_tasks();
         if goal_tasks.is_empty() {
-            self.status_message = Some(SharedString::from("select at least one goal task"));
+            self.status_message = Some(SharedString::from("no task is available to run"));
             return Ok(());
         }
 
         let plan = self.engine.plan_run(&self.recipe_path, &goal_tasks)?;
         self.spawn_run(plan)?;
         Ok(())
+    }
+
+    fn launcher_goal_tasks(&self) -> Vec<String> {
+        if !self.selected_goals.is_empty() {
+            return self
+                .selected_goals
+                .iter()
+                .map(|task| task.as_str().to_owned())
+                .collect::<Vec<_>>();
+        }
+
+        self.tasks
+            .get(self.selected_task_index)
+            .map(|task| vec![task.name.as_str().to_owned()])
+            .unwrap_or_default()
     }
 
     fn spawn_run(&mut self, plan: PlannedRun) -> NaoResult<()> {
@@ -1029,6 +1040,23 @@ mod tests {
         assert_eq!(app.screen, Screen::RunHistory);
         assert_eq!(app.focus, Focus::HistoryRuns);
         assert!(app.selected_goals.contains("test"));
+    }
+
+    #[test]
+    fn launcher_defaults_run_target_to_selected_task() {
+        let mut app = test_app();
+        app.selected_task_index = 1;
+
+        assert_eq!(app.launcher_goal_tasks(), vec!["test".to_owned()]);
+    }
+
+    #[test]
+    fn launcher_prefers_explicit_goal_selection() {
+        let mut app = test_app();
+        app.selected_task_index = 0;
+        app.selected_goals.insert("test".into());
+
+        assert_eq!(app.launcher_goal_tasks(), vec!["test".to_owned()]);
     }
 
     #[test]
