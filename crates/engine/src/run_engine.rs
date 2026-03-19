@@ -34,6 +34,7 @@ impl RunEngine {
 
     /// Plans a run for the requested top-level task names.
     pub fn plan_run(&self, recipe_path: &FilePath, task_names: &[String]) -> NaoResult<PlannedRun> {
+        let task_names = expand_task_names(task_names);
         if task_names.is_empty() {
             return Err(err!("usage: nao [--list] [--config <path>] [task-name...]"));
         }
@@ -53,7 +54,7 @@ impl RunEngine {
             requested_tasks.push(TaskName::from(task_name.as_str()));
             self.collect_task(
                 &task_index,
-                task_name,
+                &task_name,
                 &mut visiting,
                 &mut visited,
                 &mut tasks,
@@ -255,6 +256,16 @@ impl RunEngine {
         tasks.push(task.clone());
         Ok(())
     }
+}
+
+fn expand_task_names(task_names: &[String]) -> Vec<String> {
+    task_names
+        .iter()
+        .flat_map(|task_name| task_name.split(','))
+        .map(str::trim)
+        .filter(|task_name| !task_name.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn render_task_failure_message(task_failure: &TaskFailure) -> String {
@@ -484,6 +495,105 @@ test"#
         expect![
             r#"requested=test
 planned=build,test"#
+        ]
+        .assert_eq(&rendered);
+    }
+
+    #[test]
+    fn plans_comma_separated_requested_tasks() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "build" {
+                run script="./scripts/build.sh"
+              }
+
+              task "lint" {
+                run script="./scripts/lint.sh"
+              }
+
+              task "test" {
+                depends-on "build"
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        let engine = RunEngine::new(PalHandle::new(pal));
+        let plan = engine
+            .plan_run(&FilePath::from("nao.kdl"), &["lint,test".to_owned()])
+            .unwrap();
+
+        let rendered = format!(
+            "requested={}\nplanned={}",
+            plan.requested_tasks
+                .iter()
+                .map(|task| task.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            plan.tasks
+                .iter()
+                .map(|task| task.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        expect![
+            r#"requested=lint,test
+planned=lint,build,test"#
+        ]
+        .assert_eq(&rendered);
+    }
+
+    #[test]
+    fn plans_mixed_comma_separated_and_repeated_requested_tasks() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "build" {
+                run script="./scripts/build.sh"
+              }
+
+              task "lint" {
+                run script="./scripts/lint.sh"
+              }
+
+              task "test" {
+                depends-on "build"
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        let engine = RunEngine::new(PalHandle::new(pal));
+        let plan = engine
+            .plan_run(
+                &FilePath::from("nao.kdl"),
+                &["lint,test".to_owned(), "build".to_owned()],
+            )
+            .unwrap();
+
+        let rendered = format!(
+            "requested={}\nplanned={}",
+            plan.requested_tasks
+                .iter()
+                .map(|task| task.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            plan.tasks
+                .iter()
+                .map(|task| task.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        expect![
+            r#"requested=lint,test,build
+planned=lint,build,test"#
         ]
         .assert_eq(&rendered);
     }

@@ -92,4 +92,49 @@ recipe "default" {
       exit 1
     """
   }
+
+  task "slow1" description="Print numbers 1 to 20 with a delay" {
+    run shell="""
+      for i in $(seq 1 20); do
+        printf '%d\n' "$i"
+        sleep 0.5
+      done
+    """
+  }
+
+  task "slow2" description="Print numbers 1 to 20 with a delay" {
+    run shell="""
+      for i in $(seq 1 20); do
+        printf '%d\n' "$i"
+        sleep 0.5
+      done
+    """
+  }
+
+  task "slow3" description="Print numbers 1 to 20 with a delay" {
+    run shell="""
+      for i in $(seq 1 20); do
+        printf '%d\n' "$i"
+        sleep 0.5
+      done
+    """
+  }
+
+  task "slow4" description="Print numbers 1 to 20 with a delay" {
+    run shell="""
+      for i in $(seq 1 20); do
+        printf '%d\n' "$i"
+        sleep 0.5
+      done
+    """
+  }
+
+  task "slow5" description="Print numbers 1 to 20 with a delay" {
+    run shell="""
+      for i in $(seq 1 20); do
+        printf '%d\n' "$i"
+        sleep 0.5
+      done
+    """
+  }
 }
