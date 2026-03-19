@@ -246,7 +246,13 @@ impl RunEngine {
                     let task_failed = result.exit_code.unwrap_or(1) != 0;
                     if task_failed {
                         states[task_index] = TaskRunState::Failed;
-                        observer.on_task_failed(task.name.as_str());
+                        observer.on_task_failed(
+                            task.name.as_str(),
+                            result
+                                .finished_at
+                                .as_nanos()
+                                .saturating_sub(result.started_at.as_nanos()),
+                        );
                         stop_launching = true;
                         if failure_message.is_none() {
                             let task_failure = TaskFailure {
@@ -267,7 +273,13 @@ impl RunEngine {
                         }
                     } else {
                         states[task_index] = TaskRunState::Completed;
-                        observer.on_task_completed(task.name.as_str());
+                        observer.on_task_completed(
+                            task.name.as_str(),
+                            result
+                                .finished_at
+                                .as_nanos()
+                                .saturating_sub(result.started_at.as_nanos()),
+                        );
                         successful_task_count += 1;
                         if !stop_launching {
                             for dependent_index in &dependents[task_index] {
@@ -304,7 +316,7 @@ impl RunEngine {
                 }
                 Err(error_message) => {
                     states[task_index] = TaskRunState::Failed;
-                    observer.on_task_failed(task.name.as_str());
+                    observer.on_task_failed(task.name.as_str(), 0);
                     stop_launching = true;
                     let failed_at = self.pal.now();
                     if failure_message.is_none() {
@@ -1092,7 +1104,7 @@ planned=slow,slow1,slowpoke,fast"#
 
         expect![[r#"
             × error task specifier `slow_` did not match any tasks
-              at crates/engine/src/run_engine.rs:524:20
+              at crates/engine/src/run_engine.rs:536:20
         "#]]
         .assert_eq(&error.to_test_string());
     }

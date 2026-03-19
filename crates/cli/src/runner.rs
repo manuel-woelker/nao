@@ -263,6 +263,7 @@ impl SingleLineDisplay {
                 .map(|task| LiveTaskState {
                     name: task.name.0.clone(),
                     status: LiveTaskStatus::Pending,
+                    elapsed_nanos: None,
                 })
                 .collect(),
         }));
@@ -299,6 +300,15 @@ impl SingleLineDisplay {
     }
 
     fn update_task(&self, task_name: &str, status: LiveTaskStatus) {
+        self.update_task_with_elapsed(task_name, status, None);
+    }
+
+    fn update_task_with_elapsed(
+        &self,
+        task_name: &str,
+        status: LiveTaskStatus,
+        elapsed_nanos: Option<u128>,
+    ) {
         let mut snapshot = self.snapshot.lock().unwrap();
         let task = snapshot
             .tasks
@@ -306,6 +316,7 @@ impl SingleLineDisplay {
             .find(|task| task.name.as_str() == task_name)
             .unwrap();
         task.status = status;
+        task.elapsed_nanos = elapsed_nanos;
     }
 }
 
@@ -314,12 +325,12 @@ impl RunObserver for SingleLineDisplay {
         self.update_task(task_name, LiveTaskStatus::Running);
     }
 
-    fn on_task_completed(&mut self, task_name: &str) {
-        self.update_task(task_name, LiveTaskStatus::Completed);
+    fn on_task_completed(&mut self, task_name: &str, elapsed_nanos: u128) {
+        self.update_task_with_elapsed(task_name, LiveTaskStatus::Completed, Some(elapsed_nanos));
     }
 
-    fn on_task_failed(&mut self, task_name: &str) {
-        self.update_task(task_name, LiveTaskStatus::Failed);
+    fn on_task_failed(&mut self, task_name: &str, elapsed_nanos: u128) {
+        self.update_task_with_elapsed(task_name, LiveTaskStatus::Failed, Some(elapsed_nanos));
     }
 
     fn on_task_skipped(&mut self, task_name: &str) {
@@ -349,6 +360,7 @@ enum LiveTaskStatus {
 struct LiveTaskState {
     name: SharedString,
     status: LiveTaskStatus,
+    elapsed_nanos: Option<u128>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -372,6 +384,7 @@ impl LinePerTaskDisplay {
                 .map(|task| LiveTaskState {
                     name: task.name.0.clone(),
                     status: LiveTaskStatus::Pending,
+                    elapsed_nanos: None,
                 })
                 .collect(),
         }));
@@ -415,6 +428,15 @@ impl LinePerTaskDisplay {
     }
 
     fn update_task(&self, task_name: &str, status: LiveTaskStatus) {
+        self.update_task_with_elapsed(task_name, status, None);
+    }
+
+    fn update_task_with_elapsed(
+        &self,
+        task_name: &str,
+        status: LiveTaskStatus,
+        elapsed_nanos: Option<u128>,
+    ) {
         let mut snapshot = self.snapshot.lock().unwrap();
         let task = snapshot
             .tasks
@@ -422,6 +444,7 @@ impl LinePerTaskDisplay {
             .find(|task| task.name.as_str() == task_name)
             .unwrap();
         task.status = status;
+        task.elapsed_nanos = elapsed_nanos;
     }
 }
 
@@ -430,12 +453,12 @@ impl RunObserver for LinePerTaskDisplay {
         self.update_task(task_name, LiveTaskStatus::Running);
     }
 
-    fn on_task_completed(&mut self, task_name: &str) {
-        self.update_task(task_name, LiveTaskStatus::Completed);
+    fn on_task_completed(&mut self, task_name: &str, elapsed_nanos: u128) {
+        self.update_task_with_elapsed(task_name, LiveTaskStatus::Completed, Some(elapsed_nanos));
     }
 
-    fn on_task_failed(&mut self, task_name: &str) {
-        self.update_task(task_name, LiveTaskStatus::Failed);
+    fn on_task_failed(&mut self, task_name: &str, elapsed_nanos: u128) {
+        self.update_task_with_elapsed(task_name, LiveTaskStatus::Failed, Some(elapsed_nanos));
     }
 
     fn on_task_skipped(&mut self, task_name: &str) {
@@ -455,14 +478,41 @@ impl Drop for LinePerTaskDisplay {
 fn render_line_per_task_display(snapshot: LiveTaskSnapshot, running_symbol: &str) -> String {
     let mut output = String::new();
     let _ = writeln!(&mut output, "🚀 {}", snapshot.header);
+    let task_name_width = snapshot
+        .tasks
+        .iter()
+        .map(|task| task.name.as_str().len())
+        .max()
+        .unwrap_or(0);
+    let duration_width = snapshot
+        .tasks
+        .iter()
+        .filter_map(|task| task.elapsed_nanos)
+        .map(format_live_task_runtime_seconds)
+        .map(|duration| duration.len())
+        .max()
+        .unwrap_or(0);
 
     for task in &snapshot.tasks {
-        let _ = writeln!(
-            &mut output,
-            "  {} {}",
-            render_live_task_status(task.status, running_symbol),
-            task.name.as_str()
-        );
+        match task.elapsed_nanos {
+            Some(elapsed_nanos) => {
+                let _ = writeln!(
+                    &mut output,
+                    "  {} {:<task_name_width$}            {:>duration_width$}",
+                    render_live_task_status(task.status, running_symbol),
+                    task.name.as_str(),
+                    format_live_task_runtime_seconds(elapsed_nanos),
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    &mut output,
+                    "  {} {}",
+                    render_live_task_status(task.status, running_symbol),
+                    task.name.as_str()
+                );
+            }
+        }
     }
 
     output
@@ -512,6 +562,10 @@ fn pretty_duration(duration_nanos: u128) -> String {
         return format!("{:.1}ms", duration_nanos as f64 / 1_000_000.0);
     }
     format!("{:.1}s", duration_nanos as f64 / 1_000_000_000.0)
+}
+
+fn format_live_task_runtime_seconds(duration_nanos: u128) -> String {
+    format!("{:.3}s", duration_nanos as f64 / 1_000_000_000.0)
 }
 
 #[cfg(test)]
@@ -786,22 +840,27 @@ mod tests {
                     LiveTaskState {
                         name: SharedString::from("build"),
                         status: LiveTaskStatus::Completed,
+                        elapsed_nanos: Some(4_000_000),
                     },
                     LiveTaskState {
                         name: SharedString::from("test"),
                         status: LiveTaskStatus::Running,
+                        elapsed_nanos: None,
                     },
                     LiveTaskState {
                         name: SharedString::from("lint"),
                         status: LiveTaskStatus::Running,
+                        elapsed_nanos: None,
                     },
                     LiveTaskState {
                         name: SharedString::from("publish"),
                         status: LiveTaskStatus::Skipped,
+                        elapsed_nanos: None,
                     },
                     LiveTaskState {
                         name: SharedString::from("cleanup"),
                         status: LiveTaskStatus::Failed,
+                        elapsed_nanos: Some(12_345_678_901),
                     },
                 ],
             },
@@ -810,11 +869,11 @@ mod tests {
 
         expect![[r#"
             🚀 Running test and 1 prerequisite task
-              ✅ build
+              ✅ build               0.004s
               ⠙  test
               ⠙  lint
               ⏭  publish
-              ❌ cleanup
+              ❌ cleanup            12.346s
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
     }
@@ -827,18 +886,22 @@ mod tests {
                 LiveTaskState {
                     name: SharedString::from("build"),
                     status: LiveTaskStatus::Completed,
+                    elapsed_nanos: Some(4_000_000),
                 },
                 LiveTaskState {
                     name: SharedString::from("lint"),
                     status: LiveTaskStatus::Running,
+                    elapsed_nanos: None,
                 },
                 LiveTaskState {
                     name: SharedString::from("test"),
                     status: LiveTaskStatus::Running,
+                    elapsed_nanos: None,
                 },
                 LiveTaskState {
                     name: SharedString::from("publish"),
                     status: LiveTaskStatus::Pending,
+                    elapsed_nanos: None,
                 },
             ],
         });
