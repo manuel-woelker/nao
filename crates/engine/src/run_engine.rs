@@ -134,14 +134,13 @@ impl RunEngine {
             run_started_system_time,
         );
         writer.write_plan(plan)?;
-        let (output, task_records, task_events, run_status, failure_message) = if plan
-            .max_parallel_tasks
-            <= 1
-        {
-            self.execute_planned_run_sequential(&recipe_directory, plan, observer, run_started_at)?
-        } else {
-            self.execute_planned_run_concurrent(&recipe_directory, plan, observer, run_started_at)?
-        };
+        let (output, task_records, task_events, run_status, failure_message) = self
+            .execute_planned_run_with_scheduler(
+                &recipe_directory,
+                plan,
+                observer,
+                run_started_at,
+            )?;
 
         let run_finished_at = self.pal.now();
         let overall_result = if matches!(run_status, RunStatus::Failed(_)) {
@@ -174,144 +173,14 @@ impl RunEngine {
         })
     }
 
-    fn execute_planned_run_sequential(
+    fn execute_planned_run_with_scheduler(
         &self,
         recipe_directory: &FilePath,
         plan: &PlannedRun,
         observer: &mut dyn RunObserver,
         run_started_at: Timestamp,
     ) -> NaoResult<TaskRunArtifacts> {
-        let mut output = SharedString::empty();
-        let mut task_records = Vec::with_capacity(plan.tasks.len());
-        let mut task_events = Vec::new();
-        let mut failure_message = None;
-        let mut failed = false;
-        let mut successful_task_count = 0usize;
-        let mut run_status = RunStatus::Completed;
-
-        for task in &plan.tasks {
-            if failed {
-                observer.on_task_skipped(task.name.as_str());
-                let skipped_at = self.pal.now();
-                task_events.push(TaskEventRecord::Skipped {
-                    task_name: task.name.0.clone(),
-                    timestamp: skipped_at,
-                });
-                task_records.push(skipped_task_record(task, skipped_at));
-                continue;
-            }
-
-            observer.on_task_started(task.name.as_str());
-            task_events.push(TaskEventRecord::Started {
-                task_name: task.name.0.clone(),
-                timestamp: self.pal.now(),
-            });
-
-            let (task_output, log_lines, execution_result) =
-                execute_task(self.pal.clone(), recipe_directory.clone(), task.clone());
-            append_task_output(&mut output, &task_output);
-
-            match execution_result {
-                Ok(result) => {
-                    let task_failed = result.exit_code.unwrap_or(1) != 0;
-                    if task_failed {
-                        observer.on_task_failed(task.name.as_str());
-                        failed = true;
-                        let task_failure = TaskFailure {
-                            task_name: task.name.0.clone(),
-                            exit_code: result.exit_code.unwrap_or(-1),
-                            elapsed_nanos: result
-                                .finished_at
-                                .as_nanos()
-                                .saturating_sub(run_started_at.as_nanos()),
-                            successful_task_count,
-                            omitted_output_line_count: task_output_omitted_line_count(&log_lines),
-                            output_tail_lines: task_output_tail_lines(&log_lines),
-                        };
-                        failure_message = Some(render_task_failure_message(&task_failure));
-                        run_status = RunStatus::Failed(task_failure);
-                    } else {
-                        observer.on_task_completed(task.name.as_str());
-                        successful_task_count += 1;
-                    }
-
-                    let status = if task_failed { "failed" } else { "completed" };
-                    let result_name = if task_failed { "failed" } else { "success" };
-                    task_events.push(TaskEventRecord::Finished {
-                        task_name: task.name.0.clone(),
-                        timestamp: result.finished_at,
-                        status: SharedString::from(status),
-                        result: SharedString::from(result_name),
-                        exit_code: result.exit_code,
-                    });
-                    task_records.push(TaskArtifactRecord {
-                        name: task.name.0.clone(),
-                        status: SharedString::from(status),
-                        result: SharedString::from(result_name),
-                        started_at: Some(result.started_at),
-                        finished_at: Some(result.finished_at),
-                        exit_code: result.exit_code,
-                        log_lines,
-                    });
-                }
-                Err(error_message) => {
-                    observer.on_task_failed(task.name.as_str());
-                    failed = true;
-                    let failed_at = self.pal.now();
-                    failure_message = Some(render_task_execution_error_message(
-                        task.name.as_str(),
-                        failed_at
-                            .as_nanos()
-                            .saturating_sub(run_started_at.as_nanos()),
-                        successful_task_count,
-                        error_message.as_str(),
-                    ));
-                    run_status = RunStatus::Failed(TaskFailure {
-                        task_name: task.name.0.clone(),
-                        exit_code: -1,
-                        elapsed_nanos: failed_at
-                            .as_nanos()
-                            .saturating_sub(run_started_at.as_nanos()),
-                        successful_task_count,
-                        omitted_output_line_count: task_output_omitted_line_count(&log_lines),
-                        output_tail_lines: task_output_tail_lines(&log_lines),
-                    });
-                    task_events.push(TaskEventRecord::Finished {
-                        task_name: task.name.0.clone(),
-                        timestamp: failed_at,
-                        status: SharedString::from("failed"),
-                        result: SharedString::from("failed"),
-                        exit_code: None,
-                    });
-                    task_records.push(TaskArtifactRecord {
-                        name: task.name.0.clone(),
-                        status: SharedString::from("failed"),
-                        result: SharedString::from("failed"),
-                        started_at: None,
-                        finished_at: Some(failed_at),
-                        exit_code: None,
-                        log_lines,
-                    });
-                }
-            }
-        }
-
-        Ok((
-            output,
-            task_records,
-            task_events,
-            run_status,
-            failure_message,
-        ))
-    }
-
-    fn execute_planned_run_concurrent(
-        &self,
-        recipe_directory: &FilePath,
-        plan: &PlannedRun,
-        observer: &mut dyn RunObserver,
-        run_started_at: Timestamp,
-    ) -> NaoResult<TaskRunArtifacts> {
+        let max_parallel_tasks = plan.max_parallel_tasks.max(1);
         let (dependents, mut remaining_prerequisites) = build_dependency_graph(&plan.tasks)?;
         let mut states = plan
             .tasks
@@ -340,10 +209,7 @@ impl RunEngine {
         let mut stop_launching = false;
 
         while running_count > 0 || (!stop_launching && !ready_queue.is_empty()) {
-            while !stop_launching
-                && running_count < plan.max_parallel_tasks
-                && !ready_queue.is_empty()
-            {
+            while !stop_launching && running_count < max_parallel_tasks && !ready_queue.is_empty() {
                 let task_index = ready_queue.pop_front().unwrap();
                 let task = plan.tasks[task_index].clone();
                 states[task_index] = TaskRunState::Running;
@@ -1226,7 +1092,7 @@ planned=slow,slow1,slowpoke,fast"#
 
         expect![[r#"
             × error task specifier `slow_` did not match any tasks
-              at crates/engine/src/run_engine.rs:658:20
+              at crates/engine/src/run_engine.rs:524:20
         "#]]
         .assert_eq(&error.to_test_string());
     }
