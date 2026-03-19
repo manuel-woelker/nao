@@ -34,12 +34,13 @@ impl RunEngine {
 
     /// Plans a run for the requested top-level task names.
     pub fn plan_run(&self, recipe_path: &FilePath, task_names: &[String]) -> NaoResult<PlannedRun> {
-        let task_names = expand_task_names(task_names);
-        if task_names.is_empty() {
+        let selector_parts = split_task_selectors(task_names);
+        if selector_parts.is_empty() {
             return Err(err!("usage: nao [--list] [--config <path>] [task-name...]"));
         }
 
         let recipe = load_recipe_with_pal(&*self.pal, recipe_path)?;
+        let task_names = expand_task_selectors(&recipe.tasks, &selector_parts)?;
         let mut requested_tasks = Vec::with_capacity(task_names.len());
         let mut tasks = Vec::new();
         let mut visiting = BTreeSet::new();
@@ -258,7 +259,7 @@ impl RunEngine {
     }
 }
 
-fn expand_task_names(task_names: &[String]) -> Vec<String> {
+fn split_task_selectors(task_names: &[String]) -> Vec<String> {
     task_names
         .iter()
         .flat_map(|task_name| task_name.split(','))
@@ -266,6 +267,71 @@ fn expand_task_names(task_names: &[String]) -> Vec<String> {
         .filter(|task_name| !task_name.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+fn expand_task_selectors(tasks: &[Task], selectors: &[String]) -> NaoResult<Vec<String>> {
+    let mut expanded = Vec::new();
+
+    for selector in selectors {
+        if selector.contains('_') {
+            expanded.extend(expand_wildcard_selector(tasks, selector)?);
+        } else {
+            expanded.push(selector.clone());
+        }
+    }
+
+    Ok(expanded)
+}
+
+/* 📖 # Why do task specifiers use `_` as the wildcard instead of `*`?
+Using `*` would force callers to quote task specifiers in most shells because the shell expands
+asterisks before `nao` sees the argument. `_` keeps wildcard task selection available from the
+command line without extra quoting or platform-specific escaping rules.
+*/
+fn expand_wildcard_selector(tasks: &[Task], selector: &str) -> NaoResult<Vec<String>> {
+    let pattern_parts = selector.split('_').collect::<Vec<_>>();
+    let matches = tasks
+        .iter()
+        .filter(|task| task_name_matches_selector(task.name.as_str(), &pattern_parts))
+        .map(|task| task.name.as_str().to_owned())
+        .collect::<Vec<_>>();
+
+    if matches.is_empty() {
+        return Err(err!("task specifier `{selector}` did not match any tasks"));
+    }
+
+    Ok(matches)
+}
+
+fn task_name_matches_selector(task_name: &str, pattern_parts: &[&str]) -> bool {
+    let mut remaining = task_name;
+
+    for (index, part) in pattern_parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+
+        if index == 0 {
+            if !remaining.starts_with(part) {
+                return false;
+            }
+            remaining = &remaining[part.len()..];
+            continue;
+        }
+
+        match remaining.find(part) {
+            Some(position) => {
+                remaining = &remaining[position + part.len()..];
+            }
+            None => return false,
+        }
+    }
+
+    selector_has_trailing_wildcard(pattern_parts) || remaining.is_empty()
+}
+
+fn selector_has_trailing_wildcard(pattern_parts: &[&str]) -> bool {
+    pattern_parts.last().is_some_and(|part| part.is_empty())
 }
 
 fn render_task_failure_message(task_failure: &TaskFailure) -> String {
@@ -596,6 +662,133 @@ planned=lint,build,test"#
 planned=lint,build,test"#
         ]
         .assert_eq(&rendered);
+    }
+
+    #[test]
+    fn plans_wildcard_requested_tasks() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "slow" {
+                run script="./scripts/slow.sh"
+              }
+
+              task "slow1" {
+                run script="./scripts/slow1.sh"
+              }
+
+              task "slowpoke" {
+                run script="./scripts/slowpoke.sh"
+              }
+
+              task "fast" {
+                run script="./scripts/fast.sh"
+              }
+            }
+            "#,
+        );
+        let engine = RunEngine::new(PalHandle::new(pal));
+        let plan = engine
+            .plan_run(&FilePath::from("nao.kdl"), &["slow_".to_owned()])
+            .unwrap();
+
+        let rendered = format!(
+            "requested={}\nplanned={}",
+            plan.requested_tasks
+                .iter()
+                .map(|task| task.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            plan.tasks
+                .iter()
+                .map(|task| task.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        expect![
+            r#"requested=slow,slow1,slowpoke
+planned=slow,slow1,slowpoke"#
+        ]
+        .assert_eq(&rendered);
+    }
+
+    #[test]
+    fn plans_mixed_wildcard_and_comma_separated_requested_tasks() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "slow" {
+                run script="./scripts/slow.sh"
+              }
+
+              task "slow1" {
+                run script="./scripts/slow1.sh"
+              }
+
+              task "slowpoke" {
+                run script="./scripts/slowpoke.sh"
+              }
+
+              task "fast" {
+                run script="./scripts/fast.sh"
+              }
+            }
+            "#,
+        );
+        let engine = RunEngine::new(PalHandle::new(pal));
+        let plan = engine
+            .plan_run(&FilePath::from("nao.kdl"), &["slow_,fast".to_owned()])
+            .unwrap();
+
+        let rendered = format!(
+            "requested={}\nplanned={}",
+            plan.requested_tasks
+                .iter()
+                .map(|task| task.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            plan.tasks
+                .iter()
+                .map(|task| task.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        expect![
+            r#"requested=slow,slow1,slowpoke,fast
+planned=slow,slow1,slowpoke,fast"#
+        ]
+        .assert_eq(&rendered);
+    }
+
+    #[test]
+    fn errors_when_wildcard_requested_tasks_match_nothing() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "fast" {
+                run script="./scripts/fast.sh"
+              }
+            }
+            "#,
+        );
+        let engine = RunEngine::new(PalHandle::new(pal));
+        let error = engine
+            .plan_run(&FilePath::from("nao.kdl"), &["slow_".to_owned()])
+            .unwrap_err();
+
+        expect![[r#"
+            × error task specifier `slow_` did not match any tasks
+              at crates/engine/src/run_engine.rs:300:20
+        "#]]
+        .assert_eq(&error.to_test_string());
     }
 
     #[test]
