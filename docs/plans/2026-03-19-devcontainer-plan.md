@@ -107,16 +107,16 @@ The recommended order is:
 
 # What concrete work items should be tracked?
 
-- [ ] Add `.devcontainer/devcontainer.json`.
-- [ ] Add a repository-owned `.devcontainer/Dockerfile`.
-- [ ] Install stable Rust via `rustup` in the container.
-- [ ] Pin the Rust toolchain version used by the devcontainer.
-- [ ] Install `cargo`, `rustfmt`, and `clippy` in the container environment.
-- [ ] Install the system packages needed for this Rust workspace to build successfully.
-- [ ] Configure a non-root development user.
-- [ ] Install Codex in the container image at build time.
-- [ ] Add devcontainer editor settings and extensions appropriate for Rust development.
-- [ ] Document how to use the devcontainer for normal development and Codex-assisted development.
+- [x] Add `.devcontainer/devcontainer.json`.
+- [x] Add a repository-owned `.devcontainer/Dockerfile`.
+- [x] Install stable Rust via `rustup` in the container.
+- [x] Pin the Rust toolchain version used by the devcontainer.
+- [x] Install `cargo`, `rustfmt`, and `clippy` in the container environment.
+- [x] Install the system packages needed for this Rust workspace to build successfully.
+- [x] Configure a non-root development user.
+- [x] Install Codex in the container image at build time.
+- [x] Add devcontainer editor settings and extensions appropriate for Rust development.
+- [x] Document how to use the devcontainer for normal development and Codex-assisted development.
 - [ ] Verify that `cargo build` works inside the container.
 - [ ] Verify that `cargo fmt --all` works inside the container.
 - [ ] Verify that `cargo clippy` works inside the container.
