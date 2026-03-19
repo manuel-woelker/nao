@@ -92,6 +92,7 @@ Below the first line include detail information about the changes made.
 
 **Important:** Append all user prompts included in this commit to the commit message body under a `User Prompts:` section.
 Also include the agent model identifier used for the commit in a `Model:` section in the commit message body.
+Always run `git add` and `git commit` as separate commands.
 
 **Shell escaping note:** When using fish shell, avoid special characters like `-` and `:` in commit messages that might be interpreted as command options. Use simple commit messages or properly escape special characters.
 

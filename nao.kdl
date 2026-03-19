@@ -38,10 +38,17 @@ recipe "default" {
     """
   }
 
-  task "check-code" description="Run the full repository verification script" {
+  task "check" description="Run all repository verification tasks" {
     depends-on "fmt"
     depends-on "clippy"
     depends-on "test"
+    run shell="""
+      printf 'All repository verification tasks completed.\n'
+    """
+  }
+
+  task "check-code" description="Run the full repository verification task graph" {
+    depends-on "check"
     run script="./scripts/check-code.sh"
   }
 
