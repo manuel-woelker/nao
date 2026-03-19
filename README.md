@@ -35,7 +35,7 @@ Codex is installed in the image, but authenticated usage may still require loggi
 ## How can I run Codex with less host filesystem access?
 
 Use [`scripts/run-codex-sandbox.sh`](scripts/run-codex-sandbox.sh) on Linux to start Codex inside a `bubblewrap` sandbox.
-The wrapper mounts the repository read-write, mounts the Codex state directory under `~/.codex`, mounts the pnpm-installed Codex package read-only, and hides the rest of `/home`.
+The wrapper mounts the repository read-write, mounts the Codex state directory under `~/.codex`, mounts the Cargo and Rustup homes so Cargo-installed tools such as `cargo-nextest` remain available, mounts the pnpm-installed Codex package read-only, and hides the rest of `/home`.
 
 Run:
 

@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST_HOME="${HOME:?HOME must be set}"
 HOST_USER="${USER:-$(id -un)}"
+HOST_CARGO_HOME="${CARGO_HOME:-$HOST_HOME/.cargo}"
+HOST_RUSTUP_HOME="${RUSTUP_HOME:-$HOST_HOME/.rustup}"
 SANDBOX_CWD="$ROOT_DIR"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
@@ -127,6 +129,8 @@ done
 ensure_dir_tree "$HOST_HOME"
 add_rw_bind "$ROOT_DIR"
 add_rw_bind "$HOST_HOME/.codex"
+add_rw_bind "$HOST_CARGO_HOME"
+add_rw_bind "$HOST_RUSTUP_HOME"
 add_ro_bind "$HOST_HOME/.gitconfig"
 add_ro_bind "$HOST_HOME/.local/share/pnpm"
 add_ro_bind "$CODEx_PATH"
@@ -147,7 +151,9 @@ declare -a ENV_ARGS=(
   --setenv HOME "$HOST_HOME"
   --setenv USER "$HOST_USER"
   --setenv LOGNAME "$HOST_USER"
-  --setenv PATH "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+  --setenv CARGO_HOME "$HOST_CARGO_HOME"
+  --setenv RUSTUP_HOME "$HOST_RUSTUP_HOME"
+  --setenv PATH "$HOST_CARGO_HOME/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 )
 
 for env_name in LANG LC_ALL TERM COLORTERM NO_COLOR FORCE_COLOR; do
