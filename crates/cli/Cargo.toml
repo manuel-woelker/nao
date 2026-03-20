@@ -1,17 +1,17 @@
 [package]
 name = "nao"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "CLI for the nao task runner"
 license = "MIT"
 repository = "https://github.com/manuel-woelker/nao"
 
 [dependencies]
-nao-base = { path = "../base", version = "0.1.0" }
-nao-engine = { path = "../engine", version = "0.1.0" }
-nao-pal = { path = "../pal", version = "0.1.0" }
-nao-recipe = { path = "../recipe", version = "0.1.0" }
-nao-tui = { path = "../tui", version = "0.1.0" }
+nao-base = { path = "../base", version = "0.1.1" }
+nao-engine = { path = "../engine", version = "0.1.1" }
+nao-pal = { path = "../pal", version = "0.1.1" }
+nao-recipe = { path = "../recipe", version = "0.1.1" }
+nao-tui = { path = "../tui", version = "0.1.1" }
 xflags = { workspace = true }
 
 [dev-dependencies]
