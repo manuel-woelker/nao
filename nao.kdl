@@ -32,16 +32,21 @@ recipe "default" {
     depends-on "build"
     run shell="""
       TEST_OUTPUT_FILE="$(mktemp)"
-      trap 'rm -f "$TEST_OUTPUT_FILE"' EXIT
 
-      cargo nextest run \
+      if ! cargo nextest run \
         --workspace \
         --all-targets \
         --all-features \
         --show-progress=none \
         --status-level fail \
         --no-fail-fast \
-        | tee "$TEST_OUTPUT_FILE"
+        >"$TEST_OUTPUT_FILE" 2>&1; then
+        cat "$TEST_OUTPUT_FILE"
+        rm -f "$TEST_OUTPUT_FILE"
+        exit 1
+      fi
+
+      cat "$TEST_OUTPUT_FILE"
 
       EXECUTED_TESTS="$(
         awk '
@@ -56,6 +61,7 @@ recipe "default" {
         ' "$TEST_OUTPUT_FILE"
       )"
 
+      rm -f "$TEST_OUTPUT_FILE"
       NAO_TASK_OUTCOME="$EXECUTED_TESTS tests passed"
     """
   }
