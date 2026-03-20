@@ -510,9 +510,7 @@ fn append_task_output(output: &mut SharedString, task_output: &SharedString) {
 }
 
 fn task_elapsed_nanos(started_at: Timestamp, finished_at: Timestamp) -> u128 {
-    finished_at
-        .as_nanos()
-        .saturating_sub(started_at.as_nanos())
+    finished_at.as_nanos().saturating_sub(started_at.as_nanos())
 }
 
 fn skipped_task_record(task: &Task, skipped_at: Timestamp) -> TaskArtifactRecord {

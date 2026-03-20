@@ -142,10 +142,19 @@ impl App {
     fn refresh(&mut self) -> NaoResult<()> {
         self.spinner_frame = (self.spinner_frame + 1) % spinner_frames().len();
         self.refresh_active_run()?;
-        if self.open_run_directory.is_some() {
+        if self.should_refresh_open_run_detail() {
             self.refresh_open_run_detail()?;
         }
         Ok(())
+    }
+
+    fn should_refresh_open_run_detail(&self) -> bool {
+        let Some(open_run_directory) = &self.open_run_directory else {
+            return false;
+        };
+        self.active_run
+            .as_ref()
+            .is_some_and(|active_run| active_run.run_directory == *open_run_directory)
     }
 
     fn refresh_active_run(&mut self) -> NaoResult<()> {
@@ -1417,6 +1426,84 @@ mod tests {
         App::new(PalHandle::new(pal), FilePath::from("nao.kdl")).unwrap()
     }
 
+    fn test_app_with_pal() -> (App, PalMock) {
+        let pal = PalMock::new();
+        pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "build" description="Build" {
+                run script="./scripts/build.sh"
+              }
+
+              task "test" description="Test" {
+                depends-on "build"
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "./scripts/build.sh".into(),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(1),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(2),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(3),
+                    exit_code: Some(0),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(3),
+                exit_code: Some(0),
+            },
+        );
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "./scripts/test.sh".into(),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(4),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(5),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(6),
+                    exit_code: Some(0),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(3),
+                finished_at: Timestamp::new(6),
+                exit_code: Some(0),
+            },
+        );
+        (
+            App::new(PalHandle::new(pal.clone()), FilePath::from("nao.kdl")).unwrap(),
+            pal,
+        )
+    }
+
     #[test]
     fn launcher_keys_toggle_goals_and_switch_screens() {
         let mut app = test_app();
@@ -1590,6 +1677,41 @@ mod tests {
             .join("\n");
 
         assert!(rendered.contains("30 tests passed"));
+    }
+
+    #[test]
+    fn refresh_does_not_reread_completed_open_run() {
+        let (mut app, pal) = test_app_with_pal();
+        pal.set_file(
+            ".nao/runs/2026-03-20T10-00-00Z-build/nao-summary.json",
+            r#"{
+              "result":"completed",
+              "failure_message":null,
+              "run":{"requested_tasks":["build"],"duration_nanos":"10"},
+              "tasks":[
+                {
+                  "name":"build",
+                  "status":"completed",
+                  "result":"success",
+                  "exit_code":0,
+                  "outcome_message":null,
+                  "duration_nanos":"10",
+                  "log_file":"build.log"
+                }
+              ]
+            }"#,
+        );
+        pal.set_file(
+            ".nao/runs/2026-03-20T10-00-00Z-build/build.log",
+            "[2026-03-20T10:00:01Z] stdout: done\n",
+        );
+        app.open_run(&FilePath::from(".nao/runs/2026-03-20T10-00-00Z-build"))
+            .unwrap();
+        pal.clear_effects();
+
+        app.refresh().unwrap();
+
+        pal.verify_effects(expect_test::expect![""]);
     }
 
     #[test]

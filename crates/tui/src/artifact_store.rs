@@ -242,6 +242,17 @@ fn strip_log_metadata_prefix(line: &str) -> SharedString {
 }
 
 fn load_run_summary(pal: &dyn Pal, run_directory: &FilePath) -> NaoResult<RunSummaryRecord> {
+    if let Some(summary) = read_summary_file(pal, run_directory)? {
+        return Ok(RunSummaryRecord {
+            run_directory: run_directory.clone(),
+            run_id: run_id_from_directory(run_directory),
+            requested_tasks: summary.run.requested_tasks,
+            result: summary.result,
+            failure_message: summary.failure_message,
+            task_count: summary.tasks.len(),
+        });
+    }
+
     let detail = load_run_detail(pal, run_directory)?;
     Ok(RunSummaryRecord {
         run_directory: detail.run_directory,
@@ -497,6 +508,28 @@ mod tests {
 2026-03-19T11-00-00Z-build failed"#
         ]
         .assert_eq(&rendered);
+    }
+
+    #[test]
+    fn discovers_runs_from_summary_without_loading_full_detail() {
+        let pal = PalMock::new();
+        pal.set_file(
+            ".nao/runs/2026-03-19T12-00-00Z-test/nao-summary.json",
+            r#"{
+              "result":"completed",
+              "failure_message":null,
+              "run":{"requested_tasks":["test"]},
+              "tasks":[]
+            }"#,
+        );
+        pal.clear_effects();
+
+        let runs = discover_runs(&pal, &FilePath::from("nao.kdl")).unwrap();
+
+        assert_eq!(runs.len(), 1);
+        pal.verify_effects(expect![[r#"
+READ FILE: .nao/runs/2026-03-19T12-00-00Z-test/nao-summary.json
+"#]]);
     }
 
     #[test]
