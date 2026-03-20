@@ -100,6 +100,14 @@ recipe "default" {
     """
   }
 
+  task "false-no-echo" description="Run false and skip the follow-up echo" {
+    run shell="""
+      echo "This should be executed"
+      false
+      echo "This should not be executed"
+    """
+  }
+
   task "slow1" description="Print numbers 1 to 4 with a delay" {
     run shell="""
       for i in $(seq 1 4); do

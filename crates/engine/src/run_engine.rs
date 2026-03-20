@@ -711,8 +711,17 @@ fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<
 
             #[cfg(not(windows))]
             let (executable, arguments) = (
-                SharedString::from("sh"),
-                vec![SharedString::from("-c"), command.clone()],
+                SharedString::from("bash"),
+                vec![
+                    SharedString::from("-o"),
+                    SharedString::from("errexit"),
+                    SharedString::from("-o"),
+                    SharedString::from("nounset"),
+                    SharedString::from("-o"),
+                    SharedString::from("pipefail"),
+                    SharedString::from("-c"),
+                    command.clone(),
+                ],
             );
 
             Ok(ProcessCommand {
@@ -739,6 +748,7 @@ fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<
 #[cfg(test)]
 mod tests {
     use super::RunEngine;
+    use super::build_process_command;
     use crate::run_execution_result::RunStatus;
     use crate::run_execution_result::TaskFailure;
     use expect_test::expect;
@@ -755,6 +765,7 @@ mod tests {
     use nao_pal::process_result::ProcessResult;
     use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
     use nao_recipe::LiveDisplay;
+    use nao_recipe::RunSpec;
     use std::time::{Duration, SystemTime};
 
     fn test_engine() -> RunEngine {
@@ -842,6 +853,56 @@ mod tests {
 test"#
         ]
         .assert_eq(&task_names);
+    }
+
+    #[test]
+    fn builds_shell_tasks_with_strict_bash_flags() {
+        let task = nao_recipe::Task {
+            name: "test".into(),
+            description: None,
+            dependencies: Vec::new(),
+            run: RunSpec::Shell(SharedString::from(
+                "false\necho \"This should not be executed\"",
+            )),
+            environment: Vec::new(),
+            artifacts: Vec::new(),
+        };
+
+        let command = build_process_command(&FilePath::from("."), &task).unwrap();
+
+        #[cfg(not(windows))]
+        assert_eq!(
+            command,
+            ProcessCommand {
+                executable: SharedString::from("bash"),
+                arguments: vec![
+                    SharedString::from("-o"),
+                    SharedString::from("errexit"),
+                    SharedString::from("-o"),
+                    SharedString::from("nounset"),
+                    SharedString::from("-o"),
+                    SharedString::from("pipefail"),
+                    SharedString::from("-c"),
+                    SharedString::from("false\necho \"This should not be executed\""),
+                ],
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            }
+        );
+
+        #[cfg(windows)]
+        assert_eq!(
+            command,
+            ProcessCommand {
+                executable: SharedString::from("cmd"),
+                arguments: vec![
+                    SharedString::from("/C"),
+                    SharedString::from("false\necho \"This should not be executed\""),
+                ],
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            }
+        );
     }
 
     #[test]
