@@ -1,16 +1,16 @@
 [package]
 name = "nao-tui"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Terminal UI for the nao task runner"
 license = "MIT"
 repository = "https://github.com/manuel-woelker/nao"
 
 [dependencies]
-nao-base = { path = "../base", version = "0.1.1" }
-nao-engine = { path = "../engine", version = "0.1.1" }
-nao-pal = { path = "../pal", version = "0.1.1" }
-nao-recipe = { path = "../recipe", version = "0.1.1" }
+nao-base = { path = "../base", version = "0.1.2" }
+nao-engine = { path = "../engine", version = "0.1.2" }
+nao-pal = { path = "../pal", version = "0.1.2" }
+nao-recipe = { path = "../recipe", version = "0.1.2" }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

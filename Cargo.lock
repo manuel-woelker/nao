@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "nao"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "expect-test",
  "nao-base",
@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "nao-base"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anstream",
  "ecow",
@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "nao-engine"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "expect-test",
  "nao-base",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "nao-pal"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "expect-test",
  "ignore",
@@ -667,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "nao-recipe"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "expect-test",
  "kdl",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "nao-tui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "crossterm",
  "expect-test",
