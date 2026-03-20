@@ -37,7 +37,7 @@ Usage:
   ./scripts/release.sh [--dry-run]
 
 Options:
-  --dry-run    Run all pre-release checks and cargo publish dry runs without
+  --dry-run    Run all pre-release checks and packaging validation without
                publishing crates, creating tags, or pushing anything.
   --help       Show this help.
 EOF
@@ -231,7 +231,7 @@ run_repo_checks() {
   "$ROOT_DIR/scripts/check-code.sh"
 }
 
-run_publish_dry_runs() {
+run_package_checks() {
   local crate_dir
   local package_name
   local index
@@ -239,11 +239,10 @@ run_publish_dry_runs() {
   for index in "${!CRATE_DIRS[@]}"; do
     crate_dir="${CRATE_DIRS[$index]}"
     package_name="${CRATE_PACKAGES[$index]}"
-    log "running cargo publish --dry-run for $package_name"
-    cargo publish \
+    log "running cargo package for $package_name"
+    cargo package \
       --manifest-path "$ROOT_DIR/$crate_dir/Cargo.toml" \
-      --locked \
-      --dry-run
+      --locked
   done
 }
 
@@ -310,7 +309,7 @@ run_pre_release_checks() {
   assert_release_version_available "$version"
   run_repo_checks
   assert_clean_worktree
-  run_publish_dry_runs
+  run_package_checks
 
   if [[ "$DRY_RUN" -eq 0 ]]; then
     assert_publish_auth

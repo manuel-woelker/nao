@@ -87,7 +87,7 @@ The script will:
 
 1. run pre-release checks
 2. run `./scripts/check-code.sh`
-3. run `cargo publish --dry-run` for each publishable crate
+3. run `cargo package` for each publishable crate
 4. publish crates in dependency order
 5. wait for each published crate version to appear on crates.io
 6. create an annotated `v<version>` tag
@@ -99,6 +99,10 @@ Publishing first avoids creating a public GitHub release for a version whose cra
 
 The publish step also fails early if any crate already exists on crates.io at the selected shared version.
 That is much better than discovering it halfway through dependency verification like an idiot.
+
+The preflight uses `cargo package` instead of `cargo publish --dry-run` for dependent workspace crates.
+That is intentional.
+`cargo publish --dry-run` is the wrong tool here because crates that depend on sibling versions not yet published to crates.io will fail before the real release has even started.
 
 # What crates are published and in what order?
 
