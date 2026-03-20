@@ -31,6 +31,7 @@ CRATE_PACKAGES=(
 usage() {
   cat <<'EOF'
 Usage:
+  ./scripts/release.sh release <version>
   ./scripts/release.sh prepare <version>
   ./scripts/release.sh publish [--dry-run]
   ./scripts/release.sh [--dry-run]
@@ -176,6 +177,7 @@ update_manifest_version() {
 
 prepare_release_version() {
   local version="$1"
+  local print_manual_next_step="${2:-1}"
   local manifest_path
   local current_version
 
@@ -197,7 +199,28 @@ prepare_release_version() {
   assert_internal_dependency_versions "$version"
 
   log "prepared shared release version $version"
-  log "review the manifest changes, commit them, then run ./scripts/release.sh publish"
+  if [[ "$print_manual_next_step" -eq 1 ]]; then
+    log "review the manifest changes, commit them, then run ./scripts/release.sh publish"
+  fi
+}
+
+manifest_paths() {
+  local crate_dir
+
+  for crate_dir in "${CRATE_DIRS[@]}"; do
+    printf '%s/%s/Cargo.toml\n' "$ROOT_DIR" "$crate_dir"
+  done
+}
+
+commit_release_version_bump() {
+  local version="$1"
+  local manifest_path
+
+  while IFS= read -r manifest_path; do
+    git -C "$ROOT_DIR" add "$manifest_path"
+  done < <(manifest_paths)
+
+  git -C "$ROOT_DIR" commit -m "chore(release): Bump version to $version"
 }
 
 run_repo_checks() {
@@ -295,7 +318,7 @@ run_pre_release_checks() {
 parse_args() {
   if [[ $# -gt 0 ]]; then
     case "$1" in
-      prepare|publish)
+      release|prepare|publish)
         MODE="$1"
         shift
         ;;
@@ -307,6 +330,10 @@ parse_args() {
   fi
 
   case "$MODE" in
+    release)
+      [[ $# -eq 1 ]] || fail "release requires exactly one version argument"
+      TARGET_VERSION="$1"
+      ;;
     prepare)
       [[ $# -eq 1 ]] || fail "prepare requires exactly one version argument"
       TARGET_VERSION="$1"
@@ -337,13 +364,24 @@ parse_args() {
 main() {
   parse_args "$@"
 
+  if [[ "$MODE" == "release" ]]; then
+    validate_version "$TARGET_VERSION"
+    prepare_release_version "$TARGET_VERSION" 0
+    assert_release_version_available "$TARGET_VERSION"
+    commit_release_version_bump "$TARGET_VERSION"
+  fi
+
   if [[ "$MODE" == "prepare" ]]; then
     prepare_release_version "$TARGET_VERSION"
     return
   fi
 
   local version
-  version="$(release_version)"
+  if [[ "$MODE" == "release" ]]; then
+    version="$TARGET_VERSION"
+  else
+    version="$(release_version)"
+  fi
   [[ -n "$version" ]] || fail "failed to determine release version from crates/cli/Cargo.toml"
 
   local tag_name="v$version"

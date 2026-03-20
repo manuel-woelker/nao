@@ -28,7 +28,28 @@ Before running `./scripts/release.sh`, make sure:
 
 The script checks these conditions itself and fails fast if any of them are wrong.
 
-# How should a release be prepared?
+# How should a release be created?
+
+The simplest path is one command:
+
+```bash
+./scripts/release.sh release 0.1.1
+```
+
+That command:
+
+1. bumps all publishable crates to the shared release version
+2. updates internal dependency version pins
+3. creates a release commit
+4. runs the publish preflight checks
+5. publishes crates in dependency order
+6. creates and pushes the release tag
+
+This is the normal path.
+
+# When should `prepare` and `publish` be used separately?
+
+Use the split flow only if you want to inspect the version bump before publishing.
 
 First, bump the shared crate version with:
 
@@ -46,7 +67,7 @@ That part should stay explicit so the version bump is reviewable and the release
 
 After `prepare`, review the manifest changes and commit them on `main`.
 
-# How should a release be created?
+# How can the manual publish step be used?
 
 Run:
 
@@ -54,7 +75,9 @@ Run:
 ./scripts/release.sh publish
 ```
 
-If you want to validate the release without publishing or tagging, run:
+That uses the version already committed in the manifests and performs the real release.
+
+If you only want to validate the publish preflight without publishing or tagging, run:
 
 ```bash
 ./scripts/release.sh publish --dry-run
