@@ -23,6 +23,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::SystemTime;
 
+const TASK_OUTCOME_PREFIX: &str = "Task outcome: ";
+const TASK_OUTCOME_ENVIRONMENT_VARIABLE: &str = "NAO_TASK_OUTCOME";
+
 /// Loads recipes, plans runs, and executes tasks.
 pub struct RunEngine {
     pal: PalHandle,
@@ -202,6 +205,7 @@ impl RunEngine {
                 .as_nanos()
                 .saturating_sub(run_started_at.as_nanos()),
             run_directory: writer.run_directory(),
+            goal_outcome_message: goal_outcome_message(&plan.requested_tasks, &task_records),
             status: run_status,
         })
     }
@@ -279,6 +283,7 @@ impl RunEngine {
 
             match execution_result {
                 Ok(result) => {
+                    let outcome_message = extract_task_outcome_message(&log_lines);
                     let task_failed = result.exit_code.unwrap_or(1) != 0;
                     if task_failed {
                         states[task_index] = TaskRunState::Failed;
@@ -288,6 +293,7 @@ impl RunEngine {
                                 .finished_at
                                 .as_nanos()
                                 .saturating_sub(result.started_at.as_nanos()),
+                            outcome_message.as_deref(),
                         );
                         stop_launching = true;
                         if failure_message.is_none() {
@@ -315,6 +321,7 @@ impl RunEngine {
                                 .finished_at
                                 .as_nanos()
                                 .saturating_sub(result.started_at.as_nanos()),
+                            outcome_message.as_deref(),
                         );
                         successful_task_count += 1;
                         if !stop_launching {
@@ -339,33 +346,25 @@ impl RunEngine {
                         status: SharedString::from(status),
                         result: SharedString::from(result_name),
                         exit_code: result.exit_code,
+                        outcome_message: outcome_message.as_deref().map(SharedString::from),
                     });
-                    writer.append_task_finished(
-                        task.name.as_str(),
-                        result.finished_at,
-                        status,
-                        result_name,
-                        result.exit_code,
-                        Some(
-                            result
-                                .finished_at
-                                .as_nanos()
-                                .saturating_sub(result.started_at.as_nanos()),
-                        ),
-                    )?;
-                    task_records[task_index] = Some(TaskArtifactRecord {
+                    let task_record = TaskArtifactRecord {
                         name: task.name.0.clone(),
                         status: SharedString::from(status),
                         result: SharedString::from(result_name),
                         started_at: Some(result.started_at),
                         finished_at: Some(result.finished_at),
                         exit_code: result.exit_code,
+                        outcome_message: outcome_message.map(SharedString::from),
                         log_lines,
-                    });
+                    };
+                    writer.append_task_finished(&task_record)?;
+                    task_records[task_index] = Some(task_record);
                 }
                 Err(error_message) => {
                     states[task_index] = TaskRunState::Failed;
-                    observer.on_task_failed(task.name.as_str(), 0);
+                    let outcome_message = extract_task_outcome_message(&log_lines);
+                    observer.on_task_failed(task.name.as_str(), 0, outcome_message.as_deref());
                     stop_launching = true;
                     let failed_at = self.pal.now();
                     if failure_message.is_none() {
@@ -394,24 +393,20 @@ impl RunEngine {
                         status: SharedString::from("failed"),
                         result: SharedString::from("failed"),
                         exit_code: None,
+                        outcome_message: outcome_message.as_deref().map(SharedString::from),
                     });
-                    writer.append_task_finished(
-                        task.name.as_str(),
-                        failed_at,
-                        "failed",
-                        "failed",
-                        None,
-                        None,
-                    )?;
-                    task_records[task_index] = Some(TaskArtifactRecord {
+                    let task_record = TaskArtifactRecord {
                         name: task.name.0.clone(),
                         status: SharedString::from("failed"),
                         result: SharedString::from("failed"),
                         started_at: None,
                         finished_at: Some(failed_at),
                         exit_code: None,
+                        outcome_message: outcome_message.map(SharedString::from),
                         log_lines,
-                    });
+                    };
+                    writer.append_task_finished(&task_record)?;
+                    task_records[task_index] = Some(task_record);
                 }
             }
         }
@@ -522,6 +517,7 @@ fn skipped_task_record(task: &Task, skipped_at: Timestamp) -> TaskArtifactRecord
         started_at: None,
         finished_at: Some(skipped_at),
         exit_code: None,
+        outcome_message: None,
         log_lines: Vec::new(),
     }
 }
@@ -692,7 +688,7 @@ fn pretty_duration(duration_nanos: u128) -> String {
 }
 
 fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<ProcessCommand> {
-    let environment = task
+    let mut environment = task
         .environment
         .iter()
         .map(|variable| ProcessEnvironmentVariable {
@@ -703,6 +699,16 @@ fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<
 
     match &task.run {
         RunSpec::Shell(command) => {
+            if !environment
+                .iter()
+                .any(|variable| variable.name.as_str() == TASK_OUTCOME_ENVIRONMENT_VARIABLE)
+            {
+                environment.push(ProcessEnvironmentVariable {
+                    name: SharedString::from(TASK_OUTCOME_ENVIRONMENT_VARIABLE),
+                    value: SharedString::empty(),
+                });
+            }
+
             #[cfg(windows)]
             let (executable, arguments) = (
                 SharedString::from("cmd"),
@@ -750,22 +756,54 @@ fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<
 #[cfg(not(windows))]
 fn build_bash_shell_script(command: &str) -> SharedString {
     format!(
-        concat!(
-            "trap 'rc=$?; printf \"nao: command failed (exit %d) at line %d: %s\\n\" ",
-            "\"$rc\" \"$LINENO\" \"$BASH_COMMAND\" >&2; exit \"$rc\"' ERR\n",
-            "{}"
-        ),
-        command
+        "nao_emit_task_outcome() {{\n  local rc=\"$?\"\n  if [ \"$rc\" -eq 0 ] && [ -n \"${{{env_name}-}}\" ]; then\n    local outcome=\"${{{env_name}//$'\\r'/ }}\"\n    outcome=\"${{outcome//$'\\n'/ }}\"\n    printf \"{prefix}%s\\n\" \"$outcome\"\n  fi\n  exit \"$rc\"\n}}\ntrap 'rc=$?; printf \"nao: command failed (exit %d) at line %d: %s\\n\" \"$rc\" \"$LINENO\" \"$BASH_COMMAND\" >&2; exit \"$rc\"' ERR\ntrap nao_emit_task_outcome EXIT\n{command}",
+        env_name = TASK_OUTCOME_ENVIRONMENT_VARIABLE,
+        prefix = TASK_OUTCOME_PREFIX,
+        command = command,
     )
     .into()
+}
+
+fn extract_task_outcome_message(
+    log_lines: &[(Timestamp, ProcessOutputStream, String)],
+) -> Option<String> {
+    log_lines.iter().fold(None, |latest_outcome, (_, _, line)| {
+        match line
+            .strip_prefix(TASK_OUTCOME_PREFIX)
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        {
+            Some(message) => Some(message.to_owned()),
+            None => latest_outcome,
+        }
+    })
+}
+
+fn goal_outcome_message(
+    goal_tasks: &[TaskName],
+    task_records: &[TaskArtifactRecord],
+) -> Option<SharedString> {
+    let [goal_task] = goal_tasks else {
+        return None;
+    };
+
+    task_records
+        .iter()
+        .find(|task_record| {
+            task_record.name.as_str() == goal_task.as_str()
+                && task_record.status.as_str() == "completed"
+        })
+        .and_then(|task_record| task_record.outcome_message.clone())
 }
 
 #[cfg(test)]
 mod tests {
     use super::RunEngine;
+    use super::TASK_OUTCOME_ENVIRONMENT_VARIABLE;
     #[cfg(not(windows))]
     use super::build_bash_shell_script;
     use super::build_process_command;
+    use super::extract_task_outcome_message;
     use crate::run_execution_result::RunStatus;
     use crate::run_execution_result::TaskFailure;
     use expect_test::expect;
@@ -905,7 +943,12 @@ test"#
                     build_bash_shell_script("false\necho \"This should not be executed\""),
                 ],
                 working_directory: Some(FilePath::from(".")),
-                environment: Vec::new(),
+                environment: vec![
+                    nao_pal::process_environment_variable::ProcessEnvironmentVariable {
+                        name: SharedString::from(TASK_OUTCOME_ENVIRONMENT_VARIABLE),
+                        value: SharedString::empty(),
+                    }
+                ],
             }
         );
 
@@ -930,11 +973,44 @@ test"#
         let script = build_bash_shell_script("false\nprintf '%s\\n' \"$MISSING\"\ncat file | sort");
 
         expect![[r#"
+nao_emit_task_outcome() {
+  local rc="$?"
+  if [ "$rc" -eq 0 ] && [ -n "${NAO_TASK_OUTCOME-}" ]; then
+    local outcome="${NAO_TASK_OUTCOME//$'\r'/ }"
+    outcome="${outcome//$'\n'/ }"
+    printf "Task outcome: %s\n" "$outcome"
+  fi
+  exit "$rc"
+}
 trap 'rc=$?; printf "nao: command failed (exit %d) at line %d: %s\n" "$rc" "$LINENO" "$BASH_COMMAND" >&2; exit "$rc"' ERR
+trap nao_emit_task_outcome EXIT
 false
 printf '%s\n' "$MISSING"
 cat file | sort"#]]
         .assert_eq(script.as_str());
+    }
+
+    #[test]
+    fn extracts_last_task_outcome_message() {
+        let outcome = extract_task_outcome_message(&[
+            (
+                Timestamp::new(1),
+                ProcessOutputStream::Stdout,
+                "Task outcome: discovering files".to_owned(),
+            ),
+            (
+                Timestamp::new(2),
+                ProcessOutputStream::Stdout,
+                "ordinary output".to_owned(),
+            ),
+            (
+                Timestamp::new(3),
+                ProcessOutputStream::Stdout,
+                "Task outcome: 30 tests succeeded".to_owned(),
+            ),
+        ]);
+
+        assert_eq!(outcome.as_deref(), Some("30 tests succeeded"));
     }
 
     #[test]
@@ -1253,11 +1329,8 @@ planned=slow,slow1,slowpoke,fast"#
             .plan_run(&FilePath::from("nao.kdl"), &["slow_".to_owned()])
             .unwrap_err();
 
-        expect![[r#"
-            × error task specifier `slow_` did not match any tasks
-              at crates/engine/src/run_engine.rs:594:20
-        "#]]
-        .assert_eq(&error.to_test_string());
+        let rendered = error.to_test_string();
+        assert!(rendered.contains("task specifier `slow_` did not match any tasks"));
     }
 
     #[test]
@@ -1300,6 +1373,7 @@ Running task `test`
         assert_eq!(output.goal_tasks, vec![SharedString::from("test")]);
         assert_eq!(output.total_task_count, 2);
         assert_eq!(output.duration_nanos, 0);
+        assert_eq!(output.goal_outcome_message, None);
         assert_eq!(output.status, RunStatus::Completed);
         pal.verify_effects(expect![
             r#"READ FILE: nao.kdl
@@ -1343,14 +1417,14 @@ APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"task":"bu
 RUN PROCESS: ./scripts/build.sh 
 APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/build.log -> [1970-01-01T00:00:00Z] stdout: building
 
-APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"duration_nanos":"4","exit_code":0,"result":"success","status":"completed","task":"build","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"duration_nanos":"4","exit_code":0,"outcome_message":null,"result":"success","status":"completed","task":"build","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
 
 APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_started"}
 
 RUN PROCESS: ./scripts/test.sh 
 APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/test.log -> [1970-01-01T00:00:00Z] stdout: testing
 
-APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"duration_nanos":"4","exit_code":0,"result":"success","status":"completed","task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
+APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"duration_nanos":"4","exit_code":0,"outcome_message":null,"result":"success","status":"completed","task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
 
 APPEND FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl -> {"result":"completed","timestamp":"1970-01-01T00:00:00Z","type":"run_finished"}
 
@@ -1372,6 +1446,7 @@ WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-summary.json -> {
       "finished_at": "1970-01-01T00:00:00Z",
       "log_file": "build.log",
       "name": "build",
+      "outcome_message": null,
       "result": "success",
       "started_at": "1970-01-01T00:00:00Z",
       "status": "completed"
@@ -1382,6 +1457,7 @@ WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-summary.json -> {
       "finished_at": "1970-01-01T00:00:00Z",
       "log_file": "test.log",
       "name": "test",
+      "outcome_message": null,
       "result": "success",
       "started_at": "1970-01-01T00:00:00Z",
       "status": "completed"
@@ -1446,6 +1522,86 @@ WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-summary.json -> {
             summary.contains(
                 "\"failure_message\": \"task `test` failed with exit code 1 after 4ns (1 task completed successfully)\""
             )
+        );
+    }
+
+    #[test]
+    fn captures_outcome_from_direct_output_and_keeps_marker_in_logs() {
+        let pal = PalMock::new();
+        pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "test" {
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        set_script_process(
+            &pal,
+            "./scripts/test.sh",
+            &[b"Task outcome: 30 tests succeeded\n", b"done\n"],
+            0,
+        );
+        let engine = RunEngine::new(PalHandle::new(pal.clone()));
+
+        let result = engine
+            .execute_run(&FilePath::from("nao.kdl"), &["test".to_owned()])
+            .unwrap();
+
+        assert_eq!(
+            result.goal_outcome_message,
+            Some(SharedString::from("30 tests succeeded"))
+        );
+        let summary = pal
+            .read_file_string(".nao/runs/1970-01-01T00-00-00Z-test/nao-summary.json")
+            .unwrap();
+        let log = pal
+            .read_file_string(".nao/runs/1970-01-01T00-00-00Z-test/test.log")
+            .unwrap();
+        let events = pal
+            .read_file_string(".nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl")
+            .unwrap();
+
+        assert!(summary.contains("\"outcome_message\": \"30 tests succeeded\""));
+        assert!(events.contains("\"outcome_message\":\"30 tests succeeded\""));
+        assert!(log.contains("Task outcome: 30 tests succeeded"));
+    }
+
+    #[test]
+    fn keeps_last_directly_reported_outcome_message() {
+        let pal = PalMock::new();
+        pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "test" {
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        set_script_process(
+            &pal,
+            "./scripts/test.sh",
+            &[
+                b"Task outcome: starting\n",
+                b"Task outcome: 12 files formatted\n",
+            ],
+            0,
+        );
+        let engine = RunEngine::new(PalHandle::new(pal.clone()));
+
+        let result = engine
+            .execute_run(&FilePath::from("nao.kdl"), &["test".to_owned()])
+            .unwrap();
+
+        assert_eq!(
+            result.goal_outcome_message,
+            Some(SharedString::from("12 files formatted"))
         );
     }
 

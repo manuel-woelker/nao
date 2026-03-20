@@ -115,6 +115,10 @@ impl Runner {
                 &result.goal_tasks,
                 result.total_task_count,
                 result.duration_nanos,
+                result
+                    .goal_outcome_message
+                    .as_ref()
+                    .map(|value| value.as_str()),
             ),
             RunStatus::Failed(task_failure) => {
                 render_failure_summary(&result.goal_tasks, task_failure)
@@ -160,12 +164,16 @@ fn render_success_summary(
     goal_tasks: &[SharedString],
     total_task_count: usize,
     duration_nanos: u128,
+    goal_outcome_message: Option<&str>,
 ) -> String {
     let bold_goal_tasks = style_bold_white(&join_goal_tasks(goal_tasks));
     let bold_duration = style_bold_white(&pretty_duration(duration_nanos));
+    let outcome_suffix = goal_outcome_message
+        .map(|message| format!(": {}", style_bold_white(message)))
+        .unwrap_or_default();
 
     format!(
-        "✅ Suceeded {bold_goal_tasks} in {bold_duration} ({} {})\n",
+        "✅ Suceeded {bold_goal_tasks} in {bold_duration} ({} {}){outcome_suffix}\n",
         total_task_count,
         if total_task_count == 1 {
             "task"
@@ -286,6 +294,7 @@ impl SingleLineDisplay {
                     name: task.name.0.clone(),
                     status: LiveTaskStatus::Pending,
                     elapsed_nanos: None,
+                    outcome_message: None,
                 })
                 .collect(),
         }));
@@ -322,7 +331,7 @@ impl SingleLineDisplay {
     }
 
     fn update_task(&self, task_name: &str, status: LiveTaskStatus) {
-        self.update_task_with_elapsed(task_name, status, None);
+        self.update_task_with_elapsed(task_name, status, None, None);
     }
 
     fn update_task_with_elapsed(
@@ -330,6 +339,7 @@ impl SingleLineDisplay {
         task_name: &str,
         status: LiveTaskStatus,
         elapsed_nanos: Option<u128>,
+        outcome_message: Option<&str>,
     ) {
         let mut snapshot = self.snapshot.lock().unwrap();
         let task = snapshot
@@ -339,6 +349,7 @@ impl SingleLineDisplay {
             .unwrap();
         task.status = status;
         task.elapsed_nanos = elapsed_nanos;
+        task.outcome_message = outcome_message.map(SharedString::from);
     }
 }
 
@@ -347,12 +358,32 @@ impl RunObserver for SingleLineDisplay {
         self.update_task(task_name, LiveTaskStatus::Running);
     }
 
-    fn on_task_completed(&mut self, task_name: &str, elapsed_nanos: u128) {
-        self.update_task_with_elapsed(task_name, LiveTaskStatus::Completed, Some(elapsed_nanos));
+    fn on_task_completed(
+        &mut self,
+        task_name: &str,
+        elapsed_nanos: u128,
+        outcome_message: Option<&str>,
+    ) {
+        self.update_task_with_elapsed(
+            task_name,
+            LiveTaskStatus::Completed,
+            Some(elapsed_nanos),
+            outcome_message,
+        );
     }
 
-    fn on_task_failed(&mut self, task_name: &str, elapsed_nanos: u128) {
-        self.update_task_with_elapsed(task_name, LiveTaskStatus::Failed, Some(elapsed_nanos));
+    fn on_task_failed(
+        &mut self,
+        task_name: &str,
+        elapsed_nanos: u128,
+        outcome_message: Option<&str>,
+    ) {
+        self.update_task_with_elapsed(
+            task_name,
+            LiveTaskStatus::Failed,
+            Some(elapsed_nanos),
+            outcome_message,
+        );
     }
 
     fn on_task_skipped(&mut self, task_name: &str) {
@@ -383,6 +414,7 @@ struct LiveTaskState {
     name: SharedString,
     status: LiveTaskStatus,
     elapsed_nanos: Option<u128>,
+    outcome_message: Option<SharedString>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,6 +439,7 @@ impl LinePerTaskDisplay {
                     name: task.name.0.clone(),
                     status: LiveTaskStatus::Pending,
                     elapsed_nanos: None,
+                    outcome_message: None,
                 })
                 .collect(),
         }));
@@ -450,7 +483,7 @@ impl LinePerTaskDisplay {
     }
 
     fn update_task(&self, task_name: &str, status: LiveTaskStatus) {
-        self.update_task_with_elapsed(task_name, status, None);
+        self.update_task_with_elapsed(task_name, status, None, None);
     }
 
     fn update_task_with_elapsed(
@@ -458,6 +491,7 @@ impl LinePerTaskDisplay {
         task_name: &str,
         status: LiveTaskStatus,
         elapsed_nanos: Option<u128>,
+        outcome_message: Option<&str>,
     ) {
         let mut snapshot = self.snapshot.lock().unwrap();
         let task = snapshot
@@ -467,6 +501,7 @@ impl LinePerTaskDisplay {
             .unwrap();
         task.status = status;
         task.elapsed_nanos = elapsed_nanos;
+        task.outcome_message = outcome_message.map(SharedString::from);
     }
 }
 
@@ -475,12 +510,32 @@ impl RunObserver for LinePerTaskDisplay {
         self.update_task(task_name, LiveTaskStatus::Running);
     }
 
-    fn on_task_completed(&mut self, task_name: &str, elapsed_nanos: u128) {
-        self.update_task_with_elapsed(task_name, LiveTaskStatus::Completed, Some(elapsed_nanos));
+    fn on_task_completed(
+        &mut self,
+        task_name: &str,
+        elapsed_nanos: u128,
+        outcome_message: Option<&str>,
+    ) {
+        self.update_task_with_elapsed(
+            task_name,
+            LiveTaskStatus::Completed,
+            Some(elapsed_nanos),
+            outcome_message,
+        );
     }
 
-    fn on_task_failed(&mut self, task_name: &str, elapsed_nanos: u128) {
-        self.update_task_with_elapsed(task_name, LiveTaskStatus::Failed, Some(elapsed_nanos));
+    fn on_task_failed(
+        &mut self,
+        task_name: &str,
+        elapsed_nanos: u128,
+        outcome_message: Option<&str>,
+    ) {
+        self.update_task_with_elapsed(
+            task_name,
+            LiveTaskStatus::Failed,
+            Some(elapsed_nanos),
+            outcome_message,
+        );
     }
 
     fn on_task_skipped(&mut self, task_name: &str) {
@@ -514,24 +569,58 @@ fn render_line_per_task_display(snapshot: LiveTaskSnapshot, running_symbol: &str
         .map(|duration| duration.len())
         .max()
         .unwrap_or(0);
+    let outcome_width = snapshot
+        .tasks
+        .iter()
+        .filter_map(|task| task.outcome_message.as_ref())
+        .map(|outcome| outcome.as_str().len())
+        .max()
+        .unwrap_or(0);
 
     for task in &snapshot.tasks {
-        match task.elapsed_nanos {
-            Some(elapsed_nanos) => {
+        let task_name = format!("{:<task_name_width$}", task.name.as_str());
+        let duration = task
+            .elapsed_nanos
+            .map(format_live_task_runtime_seconds)
+            .or_else(|| (task.status == LiveTaskStatus::Running).then(|| "running".to_owned()));
+        let outcome = task.outcome_message.as_ref().map(|value| value.as_str());
+
+        match (duration, outcome) {
+            (Some(duration), Some(outcome)) => {
                 let _ = writeln!(
                     &mut output,
-                    "  {} {:<task_name_width$}            {:>duration_width$}",
+                    "  {} {}  {:>duration_width$}  {:<outcome_width$}",
                     render_live_task_status(task.status, running_symbol),
-                    task.name.as_str(),
-                    format_live_task_runtime_seconds(elapsed_nanos),
+                    task_name,
+                    duration,
+                    outcome,
                 );
             }
-            None => {
+            (Some(duration), None) => {
+                let _ = writeln!(
+                    &mut output,
+                    "  {} {}  {:>duration_width$}",
+                    render_live_task_status(task.status, running_symbol),
+                    task_name,
+                    duration,
+                );
+            }
+            (None, Some(outcome)) => {
+                let _ = writeln!(
+                    &mut output,
+                    "  {} {}  {:duration_width$}  {:<outcome_width$}",
+                    render_live_task_status(task.status, running_symbol),
+                    task_name,
+                    "",
+                    outcome,
+                );
+            }
+            (None, None) => {
                 let _ = writeln!(
                     &mut output,
                     "  {} {}",
                     render_live_task_status(task.status, running_symbol),
-                    task.name.as_str()
+                    task_name,
                 );
             }
         }
@@ -776,6 +865,7 @@ mod tests {
             &[SharedString::from("lint"), SharedString::from("test")],
             5,
             2_500_000,
+            None,
         );
 
         expect![[r#"
@@ -793,6 +883,21 @@ mod tests {
 
         expect![[r#"
             🚀 Running lint,test and 3 prerequisite tasks
+        "#]]
+        .assert_eq(&nao_base::unansi(&rendered));
+    }
+
+    #[test]
+    fn renders_success_summary_with_goal_outcome() {
+        let rendered = render_success_summary(
+            &[SharedString::from("test")],
+            2,
+            2_500_000,
+            Some("30 tests succeeded"),
+        );
+
+        expect![[r#"
+            ✅ Suceeded test in 2.5ms (2 tasks): 30 tests succeeded
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
     }
@@ -863,26 +968,31 @@ mod tests {
                         name: SharedString::from("build"),
                         status: LiveTaskStatus::Completed,
                         elapsed_nanos: Some(4_000_000),
+                        outcome_message: Some(SharedString::from("build ready")),
                     },
                     LiveTaskState {
                         name: SharedString::from("test"),
                         status: LiveTaskStatus::Running,
                         elapsed_nanos: None,
+                        outcome_message: None,
                     },
                     LiveTaskState {
                         name: SharedString::from("lint"),
                         status: LiveTaskStatus::Running,
                         elapsed_nanos: None,
+                        outcome_message: None,
                     },
                     LiveTaskState {
                         name: SharedString::from("publish"),
                         status: LiveTaskStatus::Skipped,
                         elapsed_nanos: None,
+                        outcome_message: None,
                     },
                     LiveTaskState {
                         name: SharedString::from("cleanup"),
                         status: LiveTaskStatus::Failed,
                         elapsed_nanos: Some(12_345_678_901),
+                        outcome_message: Some(SharedString::from("3 files uploaded")),
                     },
                 ],
             },
@@ -891,11 +1001,11 @@ mod tests {
 
         expect![[r#"
             🚀 Running test and 1 prerequisite task
-              ✅ build               0.004s
-              ⠙  test
-              ⠙  lint
+              ✅ build     0.004s  build ready     
+              ⠙  test     running
+              ⠙  lint     running
               ⏭  publish
-              ❌ cleanup            12.346s
+              ❌ cleanup  12.346s  3 files uploaded
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
     }
@@ -909,21 +1019,25 @@ mod tests {
                     name: SharedString::from("build"),
                     status: LiveTaskStatus::Completed,
                     elapsed_nanos: Some(4_000_000),
+                    outcome_message: None,
                 },
                 LiveTaskState {
                     name: SharedString::from("lint"),
                     status: LiveTaskStatus::Running,
                     elapsed_nanos: None,
+                    outcome_message: None,
                 },
                 LiveTaskState {
                     name: SharedString::from("test"),
                     status: LiveTaskStatus::Running,
                     elapsed_nanos: None,
+                    outcome_message: None,
                 },
                 LiveTaskState {
                     name: SharedString::from("publish"),
                     status: LiveTaskStatus::Pending,
                     elapsed_nanos: None,
+                    outcome_message: None,
                 },
             ],
         });

@@ -23,6 +23,8 @@ pub enum TaskEventRecord {
         result: SharedString,
         /// Exit code when available.
         exit_code: Option<i32>,
+        /// Final reported task outcome when available.
+        outcome_message: Option<SharedString>,
     },
     /// A task was skipped after scheduling stopped.
     Skipped {

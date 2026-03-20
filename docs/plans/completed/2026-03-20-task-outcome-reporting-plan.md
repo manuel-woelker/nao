@@ -7,7 +7,7 @@ Users must inspect full task output to find the useful one-line result.
 
 # What is the current status?
 
-The repository currently has:
+The repository now has:
 
 - strict Bash execution for Unix `run shell` tasks in [crates/engine/src/run_engine.rs](/data/projects/nao/crates/engine/src/run_engine.rs)
 - failure reporting via an injected `ERR` trap for shell tasks
@@ -15,11 +15,13 @@ The repository currently has:
 - persisted task summary data through `TaskArtifactRecord` and `nao-summary.json` in [crates/engine/src/run_artifact_writer.rs](/data/projects/nao/crates/engine/src/run_artifact_writer.rs)
 - CLI and TUI surfaces that already display task result and failure information
 
-The main missing pieces are:
+The completed work added:
 
-- a task-facing API for setting an outcome message
-- engine logic that extracts and persists the final outcome
-- CLI and TUI rendering that shows the outcome as part of task results
+- direct `Task outcome: ...` capture from framed task output
+- a Unix shell-task helper through `NAO_TASK_OUTCOME`
+- persisted `outcome_message` fields in run events and summaries
+- CLI success-summary rendering for single-goal outcomes
+- TUI task and detail rendering for persisted outcomes
 
 # What implementation approach should be used?
 
@@ -167,26 +169,26 @@ The recommended order is:
 7. Update the TUI artifact loading and task detail rendering to surface the outcome.
 8. Document the direct-output contract and shell-task helper examples.
 
-# What concrete work items should be tracked?
+# What concrete work items were completed?
 
-- [ ] Detect `Task outcome: ` lines in engine task output processing.
-- [ ] Decide whether failed tasks should ignore previously emitted matching log lines or preserve them as debug metadata.
-- [ ] Persist `outcome_message` on finished task events and task artifact records.
-- [ ] Write `outcome_message` into `nao-events.jsonl` and `nao-summary.json`.
-- [ ] Update TUI summary/event loading to deserialize and expose the new field.
-- [ ] Update CLI rendering to display the outcome on successful task completion when available.
-- [ ] Update TUI rendering to display the outcome in task detail views.
-- [ ] Add a Unix shell-wrapper helper that composes strict Bash, the existing `ERR` trap, and a success-path `EXIT` trap for outcome emission.
-- [ ] Decide whether `NAO_TASK_OUTCOME` should be injected as empty by default or only consumed when explicitly set by the task.
-- [ ] Normalize or reject multiline outcome values before wrapper-driven marker emission.
-- [ ] Add engine tests for shell wrapper generation with both failure and success traps.
-- [ ] Add engine tests for extracting the last emitted outcome line and ignoring earlier values.
-- [ ] Add engine tests proving directly printed outcome lines are captured without shell-wrapper help.
-- [ ] Add engine tests proving human-readable outcome lines remain in persisted task logs.
-- [ ] Add artifact tests for `nao-events.jsonl` and `nao-summary.json` including `outcome_message`.
-- [ ] Add CLI or runner tests for successful task rendering with an outcome message.
-- [ ] Add TUI tests for loading and rendering persisted task outcomes.
-- [ ] Update user-facing docs and examples.
+- [x] Detect `Task outcome: ` lines in engine task output processing.
+- [x] Decide whether failed tasks should ignore previously emitted matching log lines or preserve them as debug metadata.
+- [x] Persist `outcome_message` on finished task events and task artifact records.
+- [x] Write `outcome_message` into `nao-events.jsonl` and `nao-summary.json`.
+- [x] Update TUI summary/event loading to deserialize and expose the new field.
+- [x] Update CLI rendering to display the outcome on successful task completion when available.
+- [x] Update TUI rendering to display the outcome in task detail views.
+- [x] Add a Unix shell-wrapper helper that composes strict Bash, the existing `ERR` trap, and a success-path `EXIT` trap for outcome emission.
+- [x] Decide whether `NAO_TASK_OUTCOME` should be injected as empty by default or only consumed when explicitly set by the task.
+- [x] Normalize or reject multiline outcome values before wrapper-driven marker emission.
+- [x] Add engine tests for shell wrapper generation with both failure and success traps.
+- [x] Add engine tests for extracting the last emitted outcome line and ignoring earlier values.
+- [x] Add engine tests proving directly printed outcome lines are captured without shell-wrapper help.
+- [x] Add engine tests proving human-readable outcome lines remain in persisted task logs.
+- [x] Add artifact tests for `nao-events.jsonl` and `nao-summary.json` including `outcome_message`.
+- [x] Add CLI or runner tests for successful task rendering with an outcome message.
+- [x] Add TUI tests for loading and rendering persisted task outcomes.
+- [x] Update user-facing docs and examples.
 - [ ] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
@@ -204,7 +206,7 @@ Verification should include:
 
 The tests should prefer `PalMock` and existing artifact assertions so the behavior remains deterministic.
 
-# What assumptions should remain explicit?
+# What assumptions remained explicit?
 
 This plan assumes:
 
@@ -214,16 +216,17 @@ This plan assumes:
 - leaving human-readable outcome lines in user-visible logs is preferable to hiding them
 - later support for structured outcome payloads may be desirable but is not required now
 
-# What risks or open questions matter most?
+# What decisions and follow-up notes matter most?
 
-The main open questions are:
+The implemented slice made these decisions:
 
-- whether script tasks and Windows shell tasks should also receive a helper mechanism in the first slice or be left with direct-output support only
-- whether the outcome marker should remain plain text or move to JSON immediately
-- whether extraction belongs in the output framer, the task executor, or artifact writing
-- whether the CLI should show only per-task outcomes or also aggregate them into the final run summary
+- failed tasks preserve the last emitted outcome as debug metadata, but the CLI only promotes outcomes in successful single-goal summaries
+- Unix `run shell` tasks receive the helper mechanism in this first slice, while script tasks and Windows shell tasks use direct output only
+- the outcome marker remains plain text for now
+- extraction happens in engine post-processing over framed task lines
+- the CLI shows the outcome in the final success summary for a single requested goal task rather than trying to aggregate multiple outcomes
 
-The main risks are:
+The remaining follow-up areas are:
 
-- shell-trap composition accidentally changing the existing failure semantics
-- shell-trap emission and engine extraction disagreeing about newline normalization
+- expanding the helper mechanism beyond Unix shell tasks if that becomes important
+- reconsidering whether richer task-list rendering should surface outcomes more prominently in the CLI or TUI

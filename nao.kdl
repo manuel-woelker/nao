@@ -31,10 +31,32 @@ recipe "default" {
   task "test" description="Run the test suite" {
     depends-on "build"
     run shell="""
+      TEST_OUTPUT_FILE="$(mktemp)"
+      trap 'rm -f "$TEST_OUTPUT_FILE"' EXIT
+
       cargo nextest run \
         --workspace \
         --all-targets \
-        --all-features
+        --all-features \
+        --show-progress=none \
+        --status-level fail \
+        --no-fail-fast \
+        | tee "$TEST_OUTPUT_FILE"
+
+      EXECUTED_TESTS="$(
+        awk '
+          /Summary .* tests run:/ {
+            if (match($0, / ([0-9]+) tests run:/, matches)) {
+              total += matches[1]
+            }
+          }
+          END {
+            print total + 0
+          }
+        ' "$TEST_OUTPUT_FILE"
+      )"
+
+      NAO_TASK_OUTCOME="$EXECUTED_TESTS tests passed"
     """
   }
 
@@ -108,48 +130,38 @@ recipe "default" {
     """
   }
 
-  task "slow1" description="Print numbers 1 to 4 with a delay" {
+  task "slow1" description="Sleep for 1 second" {
     run shell="""
-      for i in $(seq 1 4); do
-        printf '%d\n' "$i"
-        sleep 0.5
-      done
+      sleep 1
+      NAO_TASK_OUTCOME="slept for 1 second"
     """
   }
 
-  task "slow2" description="Print numbers 1 to 4 with a delay" {
+  task "slow2" description="Sleep for 2 seconds" {
     run shell="""
-      for i in $(seq 1 4); do
-        printf '%d\n' "$i"
-        sleep 0.5
-      done
+      sleep 2
+      NAO_TASK_OUTCOME="slept for 2 seconds"
     """
   }
 
-  task "slow3" description="Print numbers 1 to 4 with a delay" {
+  task "slow3" description="Sleep for 3 seconds" {
     run shell="""
-      for i in $(seq 1 4); do
-        printf '%d\n' "$i"
-        sleep 0.5
-      done
+      sleep 3
+      NAO_TASK_OUTCOME="slept for 3 seconds"
     """
   }
 
-  task "slow4" description="Print numbers 1 to 4 with a delay" {
+  task "slow4" description="Sleep for 4 seconds" {
     run shell="""
-      for i in $(seq 1 4); do
-        printf '%d\n' "$i"
-        sleep 0.5
-      done
+      sleep 4
+      NAO_TASK_OUTCOME="slept for 4 seconds"
     """
   }
 
-  task "slow5" description="Print numbers 1 to 4 with a delay" {
+  task "slow5" description="Sleep for 5 seconds" {
     run shell="""
-      for i in $(seq 1 4); do
-        printf '%d\n' "$i"
-        sleep 0.5
-      done
+      sleep 5
+      NAO_TASK_OUTCOME="slept for 5 seconds"
     """
   }
 }

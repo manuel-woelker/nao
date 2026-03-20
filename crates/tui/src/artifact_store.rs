@@ -33,6 +33,8 @@ pub struct RunTaskRecord {
     pub result: SharedString,
     /// Process exit code when known.
     pub exit_code: Option<i32>,
+    /// Final reported task outcome when available.
+    pub outcome_message: Option<SharedString>,
     /// Task duration in nanoseconds when known.
     pub duration_nanos: Option<u128>,
     /// Task log path relative to the run directory.
@@ -54,6 +56,8 @@ pub struct RunEventRecord {
     pub result: Option<SharedString>,
     /// Exit code when applicable.
     pub exit_code: Option<i32>,
+    /// Final reported task outcome when applicable.
+    pub outcome_message: Option<SharedString>,
     /// Task duration in nanoseconds when applicable.
     pub duration_nanos: Option<u128>,
 }
@@ -99,6 +103,7 @@ struct SummaryTaskFile {
     status: SharedString,
     result: SharedString,
     exit_code: Option<i32>,
+    outcome_message: Option<SharedString>,
     duration_nanos: Option<SharedString>,
     log_file: SharedString,
 }
@@ -127,6 +132,8 @@ struct EventFile {
     result: Option<SharedString>,
     #[serde(default)]
     exit_code: Option<i32>,
+    #[serde(default)]
+    outcome_message: Option<SharedString>,
     #[serde(default)]
     duration_nanos: Option<SharedString>,
     #[serde(default, rename = "requested_tasks")]
@@ -260,6 +267,7 @@ fn build_task_records(
                 status: task.status.clone(),
                 result: task.result.clone(),
                 exit_code: task.exit_code,
+                outcome_message: task.outcome_message.clone(),
                 duration_nanos: task
                     .duration_nanos
                     .as_ref()
@@ -278,6 +286,7 @@ fn build_task_records(
                     status: SharedString::from("pending"),
                     result: SharedString::from("pending"),
                     exit_code: None,
+                    outcome_message: None,
                     duration_nanos: None,
                     log_file: FilePath::from(format!(
                         "{}.log",
@@ -306,6 +315,7 @@ fn build_task_records(
                 status: SharedString::from("pending"),
                 result: SharedString::from("pending"),
                 exit_code: None,
+                outcome_message: None,
                 duration_nanos: None,
                 log_file: FilePath::from(format!("{}.log", sanitize_task_name(task_name.as_str()))),
             });
@@ -325,6 +335,7 @@ fn build_task_records(
                     .unwrap_or_else(|| SharedString::from("completed"));
                 task.result = event.result.clone().unwrap_or_else(|| task.status.clone());
                 task.exit_code = event.exit_code;
+                task.outcome_message = event.outcome_message.clone();
                 task.duration_nanos = event.duration_nanos;
             }
             "task_skipped" => {
@@ -381,6 +392,7 @@ fn read_events_file(pal: &dyn Pal, run_directory: &FilePath) -> NaoResult<Vec<Ru
                 status: event.status,
                 result: event.result,
                 exit_code: event.exit_code,
+                outcome_message: event.outcome_message,
                 duration_nanos: event
                     .duration_nanos
                     .as_ref()
@@ -521,6 +533,52 @@ test pending"#
         ]
         .assert_eq(&rendered);
         assert_eq!(detail.result, "running");
+    }
+
+    #[test]
+    fn loads_persisted_task_outcomes_from_summary_and_events() {
+        let pal = PalMock::new();
+        pal.set_file(
+            ".nao/runs/2026-03-19T12-00-00Z-test/nao-summary.json",
+            r#"{
+              "result":"completed",
+              "failure_message":null,
+              "run":{"requested_tasks":["test"],"duration_nanos":"10"},
+              "tasks":[
+                {
+                  "name":"test",
+                  "status":"completed",
+                  "result":"success",
+                  "exit_code":0,
+                  "outcome_message":"30 tests succeeded",
+                  "duration_nanos":"10",
+                  "log_file":"test.log"
+                }
+              ]
+            }"#,
+        );
+        pal.set_file(
+            ".nao/runs/2026-03-19T12-00-00Z-test/nao-events.jsonl",
+            "{\"type\":\"task_finished\",\"timestamp\":\"2026-03-19T12:00:01Z\",\"task\":\"test\",\"status\":\"completed\",\"result\":\"success\",\"exit_code\":0,\"outcome_message\":\"30 tests succeeded\",\"duration_nanos\":\"10\"}\n",
+        );
+
+        let detail =
+            load_run_detail(&pal, &FilePath::from(".nao/runs/2026-03-19T12-00-00Z-test")).unwrap();
+
+        assert_eq!(
+            detail.tasks[0]
+                .outcome_message
+                .as_ref()
+                .map(|value| value.as_str()),
+            Some("30 tests succeeded")
+        );
+        assert_eq!(
+            detail.events[0]
+                .outcome_message
+                .as_ref()
+                .map(|value| value.as_str()),
+            Some("30 tests succeeded")
+        );
     }
 
     #[test]

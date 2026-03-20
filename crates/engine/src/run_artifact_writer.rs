@@ -35,6 +35,8 @@ pub struct TaskArtifactRecord {
     pub finished_at: Option<Timestamp>,
     /// Process exit code when available.
     pub exit_code: Option<i32>,
+    /// Final reported task outcome when available.
+    pub outcome_message: Option<SharedString>,
     /// Timestamped log lines emitted by the task.
     pub log_lines: Vec<(Timestamp, ProcessOutputStream, String)>,
 }
@@ -143,15 +145,8 @@ impl RunArtifactWriter {
     }
 
     /// Appends a task finish event.
-    pub fn append_task_finished(
-        &self,
-        task_name: &str,
-        timestamp: Timestamp,
-        status: &str,
-        result: &str,
-        exit_code: Option<i32>,
-        duration_nanos: Option<u128>,
-    ) -> NaoResult<()> {
+    pub fn append_task_finished(&self, task_record: &TaskArtifactRecord) -> NaoResult<()> {
+        let timestamp = task_record.finished_at.unwrap_or(self.run_started_at);
         self.append_event_json(&json!({
             "type": "task_finished",
             "timestamp": format_iso8601(absolute_system_time(
@@ -159,11 +154,15 @@ impl RunArtifactWriter {
                 self.run_started_at,
                 timestamp,
             )),
-            "task": task_name,
-            "status": status,
-            "result": result,
-            "exit_code": exit_code,
-            "duration_nanos": duration_nanos.map(|duration| duration.to_string()),
+            "task": task_record.name.as_str(),
+            "status": task_record.status.as_str(),
+            "result": task_record.result.as_str(),
+            "exit_code": task_record.exit_code,
+            "outcome_message": task_record.outcome_message.as_ref().map(|value| value.as_str()),
+            "duration_nanos": task_record
+                .started_at
+                .zip(task_record.finished_at)
+                .map(|(started_at, finished_at)| finished_at.as_nanos().saturating_sub(started_at.as_nanos()).to_string()),
         }))
     }
 
@@ -262,6 +261,7 @@ impl RunArtifactWriter {
                             "status": task_record.status.as_str(),
                             "result": task_record.result.as_str(),
                             "exit_code": task_record.exit_code,
+                            "outcome_message": task_record.outcome_message.as_ref().map(|value| value.as_str()),
                             "started_at": task_record.started_at.map(|timestamp| format_iso8601(absolute_system_time(
                                 self.run_started_system_time,
                                 self.run_started_at,

@@ -800,6 +800,9 @@ impl App {
                 {
                     row.push_str(&format!("  exit {exit_code}"));
                 }
+                if let Some(outcome_message) = &task.outcome_message {
+                    row.push_str(&format!("  {}", outcome_message.as_str()));
+                }
                 Line::from(row)
             }));
             if detail.result.as_str() != "running"
@@ -990,12 +993,16 @@ impl App {
                     .iter()
                     .map(|task| {
                         ListItem::new(Line::from(format!(
-                            "{:<20} {:<10} {}",
+                            "{:<20} {:<10} {}{}",
                             task.name.as_str(),
                             task.status.as_str(),
                             task.exit_code
                                 .map(|code| format!("exit {code}"))
-                                .unwrap_or_default()
+                                .unwrap_or_default(),
+                            task.outcome_message
+                                .as_ref()
+                                .map(|message| format!(" outcome: {}", message.as_str()))
+                                .unwrap_or_default(),
                         )))
                     })
                     .collect::<Vec<_>>()
@@ -1078,6 +1085,14 @@ impl App {
                         .tasks
                         .get(self.selected_run_task_index)
                         .map(|task| task.name.as_str())
+                        .unwrap_or("-")
+                )),
+                Line::from(format!(
+                    "selected outcome: {}",
+                    detail
+                        .tasks
+                        .get(self.selected_run_task_index)
+                        .and_then(|task| task.outcome_message.as_deref())
                         .unwrap_or("-")
                 )),
                 Line::from(format!(
@@ -1496,6 +1511,7 @@ mod tests {
                   "status":"failed",
                   "result":"failed",
                   "exit_code":1,
+                  "outcome_message":"12 files checked",
                   "duration_nanos":"10",
                   "log_file":"build.log"
                 }
@@ -1517,6 +1533,63 @@ mod tests {
             app.launcher_failed_task_log_lines,
             vec![SharedString::from("compile failed")]
         );
+        assert_eq!(
+            app.run_detail
+                .as_ref()
+                .and_then(|detail| detail.tasks.first())
+                .and_then(|task| task.outcome_message.as_ref())
+                .map(|value| value.as_str()),
+            Some("12 files checked")
+        );
+    }
+
+    #[test]
+    fn launcher_progress_includes_task_outcomes() {
+        let pal = PalMock::new();
+        pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "test" description="Test" {
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        pal.set_file(
+            ".nao/runs/2026-03-20T10-00-00Z-test/nao-summary.json",
+            r#"{
+              "result":"completed",
+              "failure_message":null,
+              "run":{"requested_tasks":["test"],"duration_nanos":"10"},
+              "tasks":[
+                {
+                  "name":"test",
+                  "status":"completed",
+                  "result":"success",
+                  "exit_code":0,
+                  "outcome_message":"30 tests passed",
+                  "duration_nanos":"10",
+                  "log_file":"test.log"
+                }
+              ]
+            }"#,
+        );
+
+        let mut app = App::new(PalHandle::new(pal), FilePath::from("nao.kdl")).unwrap();
+        app.launched_run_in_session = true;
+        app.open_run(&FilePath::from(".nao/runs/2026-03-20T10-00-00Z-test"))
+            .unwrap();
+
+        let rendered = app
+            .render_launcher_progress_lines()
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("30 tests passed"));
     }
 
     #[test]

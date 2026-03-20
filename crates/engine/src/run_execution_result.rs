@@ -40,6 +40,8 @@ pub struct RunExecutionResult {
     pub duration_nanos: u128,
     /// Directory that stores the run artifacts.
     pub run_directory: FilePath,
+    /// Outcome reported by the single requested goal task when available.
+    pub goal_outcome_message: Option<SharedString>,
     /// Overall run status.
     pub status: RunStatus,
 }
