@@ -66,6 +66,37 @@ Open the repository in a devcontainer-compatible editor or CLI workflow to get a
 The container runs [`bash .devcontainer/post-create.sh`](.devcontainer/post-create.sh) after creation to print tool versions and prefetch Cargo dependencies.
 Codex is installed in the image, but authenticated usage may still require logging in with your own credentials once the container starts.
 
+## How can I use Flox for a reproducible Rust sandbox?
+
+This repository includes a checked-in Flox environment under [`.flox/env/manifest.toml`](.flox/env/manifest.toml).
+It pins the Rust toolchain and common development commands used by this project:
+
+- `rustc`
+- `cargo`
+- `rustfmt`
+- `clippy`
+- `cargo-nextest`
+- native build helpers such as `gcc` and `pkg-config`
+
+Activate it with:
+
+```bash
+flox activate
+```
+
+The environment keeps Cargo state inside `.flox/cache`, which helps isolate builds from host machine state and keeps local sandboxing predictable.
+
+Common workflows:
+
+```bash
+flox activate -- ./scripts/check-code.sh
+flox activate -- cargo build --workspace
+flox activate -- cargo nextest run --workspace --all-targets --all-features
+```
+
+Use Flox when you want a reproducible local toolchain without opening the devcontainer.
+Use the devcontainer when you want a fully containerized editor or CLI environment.
+
 ## How can I run Codex with less host filesystem access?
 
 Use [`scripts/run-codex-sandbox.sh`](scripts/run-codex-sandbox.sh) on Linux to start Codex inside a `bubblewrap` sandbox.
