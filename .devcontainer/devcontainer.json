@@ -15,6 +15,14 @@
   "remoteUser": "vscode",
   "updateRemoteUserUID": true,
   "workspaceFolder": "/workspaces/nao",
+  "mounts": [
+    "source=${localWorkspaceFolder}/.devcontainer/state/cargo-registry,target=/home/vscode/.cargo/registry,type=bind",
+    "source=${localWorkspaceFolder}/.devcontainer/state/cargo-git,target=/home/vscode/.cargo/git,type=bind",
+    "source=${localWorkspaceFolder}/.devcontainer/state/cargo-target,target=/workspaces/.cargo-target,type=bind"
+  ],
+  "containerEnv": {
+    "CARGO_TARGET_DIR": "/workspaces/.cargo-target"
+  },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
   "customizations": {
     "vscode": {

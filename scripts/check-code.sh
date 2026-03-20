@@ -78,8 +78,10 @@ fi
 EXECUTED_TESTS="$(
   awk '
     /Summary .* tests run:/ {
-      if (match($0, / ([0-9]+) tests run:/, matches)) {
-        total += matches[1]
+      for (i = 1; i <= NF; i++) {
+        if ($i == "tests" && $(i + 1) == "run:") {
+          total += $(i - 1)
+        }
       }
     }
     END {

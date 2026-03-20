@@ -11,3 +11,4 @@ flamegraph.svg
 devenv.local.nix
 devenv.local.yaml
 .direnv
+/.devcontainer/state

@@ -66,6 +66,28 @@ Open the repository in a devcontainer-compatible editor or CLI workflow to get a
 The container runs [`bash .devcontainer/post-create.sh`](.devcontainer/post-create.sh) after creation to print tool versions and prefetch Cargo dependencies.
 Codex is installed in the image, but authenticated usage may still require logging in with your own credentials once the container starts.
 
+Use [`scripts/dev.sh`](scripts/dev.sh) to start the devcontainer from the command line and enter a Bash shell:
+
+```bash
+./scripts/dev.sh
+```
+
+The wrapper automatically rebuilds the devcontainer when [`.devcontainer/devcontainer.json`](.devcontainer/devcontainer.json), [`.devcontainer/Dockerfile`](.devcontainer/Dockerfile), or [`.devcontainer/post-create.sh`](.devcontainer/post-create.sh) changes.
+
+Force a rebuild anyway when you want to blow away the existing container:
+
+```bash
+./scripts/dev.sh --rebuild
+```
+
+Pass a command to run it inside the container instead of opening an interactive shell:
+
+```bash
+./scripts/dev.sh cargo build --workspace
+```
+
+The wrapper keeps Cargo, Rustup, and Cargo target caches in `.devcontainer/state` on the host, so builds stay warm across container rebuilds without baking cache state into the image.
+
 ## How can I use Flox for a reproducible Rust sandbox?
 
 This repository includes a checked-in Flox environment under [`.flox/env/manifest.toml`](.flox/env/manifest.toml).
