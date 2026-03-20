@@ -216,10 +216,13 @@ commit_release_version_bump() {
   local version="$1"
   local manifest_path
 
+  cargo update --workspace --offline
+
   while IFS= read -r manifest_path; do
     git -C "$ROOT_DIR" add "$manifest_path"
   done < <(manifest_paths)
 
+  git -C "$ROOT_DIR" add "$ROOT_DIR/Cargo.lock"
   git -C "$ROOT_DIR" commit -m "chore(release): Bump version to $version"
 }
 
