@@ -718,9 +718,11 @@ fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<
                     SharedString::from("-o"),
                     SharedString::from("nounset"),
                     SharedString::from("-o"),
+                    SharedString::from("errtrace"),
+                    SharedString::from("-o"),
                     SharedString::from("pipefail"),
                     SharedString::from("-c"),
-                    command.clone(),
+                    build_bash_shell_script(command.as_str()),
                 ],
             );
 
@@ -745,9 +747,24 @@ fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<
     }
 }
 
+#[cfg(not(windows))]
+fn build_bash_shell_script(command: &str) -> SharedString {
+    format!(
+        concat!(
+            "trap 'rc=$?; printf \"nao: command failed (exit %d) at line %d: %s\\n\" ",
+            "\"$rc\" \"$LINENO\" \"$BASH_COMMAND\" >&2; exit \"$rc\"' ERR\n",
+            "{}"
+        ),
+        command
+    )
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::RunEngine;
+    #[cfg(not(windows))]
+    use super::build_bash_shell_script;
     use super::build_process_command;
     use crate::run_execution_result::RunStatus;
     use crate::run_execution_result::TaskFailure;
@@ -881,9 +898,11 @@ test"#
                     SharedString::from("-o"),
                     SharedString::from("nounset"),
                     SharedString::from("-o"),
+                    SharedString::from("errtrace"),
+                    SharedString::from("-o"),
                     SharedString::from("pipefail"),
                     SharedString::from("-c"),
-                    SharedString::from("false\necho \"This should not be executed\""),
+                    build_bash_shell_script("false\necho \"This should not be executed\""),
                 ],
                 working_directory: Some(FilePath::from(".")),
                 environment: Vec::new(),
@@ -903,6 +922,19 @@ test"#
                 environment: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn wraps_shell_tasks_with_err_trap_reporting() {
+        let script = build_bash_shell_script("false\nprintf '%s\\n' \"$MISSING\"\ncat file | sort");
+
+        expect![[r#"
+trap 'rc=$?; printf "nao: command failed (exit %d) at line %d: %s\n" "$rc" "$LINENO" "$BASH_COMMAND" >&2; exit "$rc"' ERR
+false
+printf '%s\n' "$MISSING"
+cat file | sort"#]]
+        .assert_eq(script.as_str());
     }
 
     #[test]
