@@ -52,7 +52,10 @@ impl Runner {
     ) -> NaoResult<RunnerOutput> {
         if list {
             return Ok(RunnerOutput {
-                output: self.render_task_list(&self.engine.list_tasks(recipe_path)?),
+                output: self.render_task_list(
+                    &self.engine.list_tasks(recipe_path)?,
+                    self.pal.is_interactive_terminal(),
+                ),
                 exit_code: ExitCode::SUCCESS,
             });
         }
@@ -134,7 +137,7 @@ impl Runner {
         })
     }
 
-    fn render_task_list(&self, tasks: &[Task]) -> String {
+    fn render_task_list(&self, tasks: &[Task], interactive_terminal: bool) -> String {
         let width = tasks
             .iter()
             .map(|task| task.name.as_str().len())
@@ -145,13 +148,17 @@ impl Runner {
         output.push_str("Available tasks:\n\n");
 
         for task in tasks {
-            let bold_name = format!("\u{1b}[1m{:<width$}\u{1b}[0m", task.name.as_str());
+            let rendered_name = if interactive_terminal {
+                format!("\u{1b}[1m{:<width$}\u{1b}[0m", task.name.as_str())
+            } else {
+                format!("{:<width$}", task.name.as_str())
+            };
             match &task.description {
                 Some(description) => {
-                    let _ = writeln!(&mut output, "  {bold_name}  {description}");
+                    let _ = writeln!(&mut output, "  {rendered_name}  {description}");
                 }
                 None => {
-                    let _ = writeln!(&mut output, "  {bold_name}");
+                    let _ = writeln!(&mut output, "  {rendered_name}");
                 }
             }
         }
@@ -173,7 +180,7 @@ fn render_success_summary(
         .unwrap_or_default();
 
     format!(
-        "✅ Suceeded {bold_goal_tasks} in {bold_duration} ({} {}){outcome_suffix}\n",
+        "✅ Succeeded {bold_goal_tasks} in {bold_duration} ({} {}){outcome_suffix}\n",
         total_task_count,
         if total_task_count == 1 {
             "task"
@@ -782,6 +789,19 @@ mod tests {
     }
 
     #[test]
+    fn renders_ansi_task_list_for_interactive_terminals() {
+        let (runner, pal) = test_runner();
+        pal.set_interactive_terminal(true);
+
+        let output = runner
+            .execute(&FilePath::from("nao.kdl"), true, &[])
+            .unwrap();
+
+        assert!(output.output.contains("\u{1b}[1m"));
+        assert_eq!(output.exit_code, ExitCode::SUCCESS);
+    }
+
+    #[test]
     fn executes_selected_tasks() {
         let (runner, pal) = test_runner();
         set_script_process(&pal, "./scripts/build.sh", b"build ok\n");
@@ -793,7 +813,7 @@ mod tests {
             .unwrap();
 
         expect![[r#"
-            ✅ Suceeded test in 0ns (2 tasks)
+            ✅ Succeeded test in 0ns (2 tasks)
         "#]]
         .assert_eq(&nao_base::unansi(&output.output));
         assert_eq!(output.exit_code, ExitCode::SUCCESS);
@@ -869,7 +889,7 @@ mod tests {
         );
 
         expect![[r#"
-            ✅ Suceeded lint,test in 2.5ms (5 tasks)
+            ✅ Succeeded lint,test in 2.5ms (5 tasks)
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
     }
@@ -897,7 +917,7 @@ mod tests {
         );
 
         expect![[r#"
-            ✅ Suceeded test in 2.5ms (2 tasks): 30 tests succeeded
+            ✅ Succeeded test in 2.5ms (2 tasks): 30 tests succeeded
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
     }

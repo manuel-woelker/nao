@@ -300,10 +300,10 @@ impl RunEngine {
                             let task_failure = TaskFailure {
                                 task_name: task.name.0.clone(),
                                 exit_code: result.exit_code.unwrap_or(-1),
-                                elapsed_nanos: result
-                                    .finished_at
-                                    .as_nanos()
-                                    .saturating_sub(run_started_at.as_nanos()),
+                                elapsed_nanos: task_elapsed_nanos(
+                                    result.started_at,
+                                    result.finished_at,
+                                ),
                                 successful_task_count,
                                 omitted_output_line_count: task_output_omitted_line_count(
                                     &log_lines,
@@ -507,6 +507,12 @@ fn append_task_output(output: &mut SharedString, task_output: &SharedString) {
         output.push_str("\n");
     }
     output.push_str(task_output.as_str());
+}
+
+fn task_elapsed_nanos(started_at: Timestamp, finished_at: Timestamp) -> u128 {
+    finished_at
+        .as_nanos()
+        .saturating_sub(started_at.as_nanos())
 }
 
 fn skipped_task_record(task: &Task, skipped_at: Timestamp) -> TaskArtifactRecord {
@@ -1522,6 +1528,76 @@ WRITE FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-summary.json -> {
             summary.contains(
                 "\"failure_message\": \"task `test` failed with exit code 1 after 4ns (1 task completed successfully)\""
             )
+        );
+    }
+
+    #[test]
+    fn reports_failed_task_duration_relative_to_task_start() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "build" {
+                run script="./scripts/build.sh"
+              }
+
+              task "test" {
+                depends-on "build"
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        set_script_process(&pal, "./scripts/build.sh", &[b"building\n"], 0);
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: SharedString::from("./scripts/test.sh"),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::Output(ProcessOutputEvent {
+                    timestamp: Timestamp::new(11),
+                    stream: ProcessOutputStream::Stdout,
+                    bytes: b"boom\n".to_vec(),
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(12),
+                    stream: ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(13),
+                    stream: ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(14),
+                    exit_code: Some(1),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(10),
+                finished_at: Timestamp::new(14),
+                exit_code: Some(1),
+            },
+        );
+        let engine = RunEngine::new(PalHandle::new(pal));
+
+        let result = engine
+            .execute_run(&FilePath::from("nao.kdl"), &["test".to_owned()])
+            .unwrap();
+
+        assert_eq!(
+            result.status,
+            RunStatus::Failed(TaskFailure {
+                task_name: SharedString::from("test"),
+                exit_code: 1,
+                elapsed_nanos: 4,
+                successful_task_count: 1,
+                omitted_output_line_count: 0,
+                output_tail_lines: vec![SharedString::from("boom")],
+            })
         );
     }
 
