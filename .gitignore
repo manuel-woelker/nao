@@ -7,3 +7,7 @@ perf.data*
 flamegraph.svg
 /verification/sources/verify/simple/classes/
 /verification/sources_invalid/classes
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+.direnv
