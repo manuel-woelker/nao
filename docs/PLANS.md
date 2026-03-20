@@ -64,14 +64,10 @@ Keep assumptions explicit so later contributors can distinguish between complete
 Every plan should describe how the work will be verified.
 Prefer explicit verification steps over generic statements like "test it."
 
-Consult `docs/VERIFICATION.md` when the plan depends on verification fixtures, reference outputs, invalid-source diagnostics, or the verification runner workflow.
-
 When relevant, include tasks for:
 
 - adding or updating colocated tests
-- adding or updating verification fixtures
-- regenerating OpenJDK reference outputs
-- running `cargo run -p rajac-verification --bin verification`
+- adding or updating test fixtures or sample inputs used by the affected code
 - running `./scripts/check-code.sh`
 
 If the work is intentionally not covered by one of these mechanisms, state that clearly.

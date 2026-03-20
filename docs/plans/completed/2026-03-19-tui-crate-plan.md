@@ -11,7 +11,10 @@ This plan describes how to add a new `crates/tui` crate built with `ratatui` tha
 
 # What is the current status?
 
-The repository currently has:
+The repository now has the `crates/tui` crate and the TUI workflow described in this plan.
+This completed copy is retained as historical implementation context, not as a statement that the work is still pending.
+
+The implemented repository includes:
 
 - a CLI runner in `crates/cli` that can list tasks and execute planned runs
 - an engine in `crates/engine` that can plan runs, execute them, emit observer callbacks, and persist `.nao/runs` artifacts
@@ -328,28 +331,31 @@ The recommended order is:
 
 # What concrete work items should be tracked?
 
-- [ ] Add `crates/tui` and register it in the workspace.
-- [ ] Add `ratatui` and the required terminal backend dependencies.
-- [ ] Define TUI application state types for screens, focus, selections, and scroll positions.
-- [ ] Add a `TaskLauncherScreen` that lists tasks and supports selecting one or more goal tasks.
-- [ ] Add a run-start action that uses `RunEngine` to plan and execute a run from the TUI.
-- [ ] Change artifact writing so task log files and `nao-events.jsonl` are appended during execution instead of only at completion.
-- [ ] Unify engine execution around one parallel scheduler where `max_parallel_tasks=1` is treated as the sequential case.
-- [ ] Align single-task worker-limit behavior with the parallel scheduler rather than preserving the current separate sequential path.
-- [ ] Add run directory discovery under `.nao/runs`.
-- [ ] Add parsing for `nao-summary.json`, `nao-events.jsonl`, and task log files.
-- [ ] Add a `RunHistoryScreen` for browsing current and historical runs.
-- [ ] Add a `RunDetailScreen` with summary, tasks, events, and task output panes.
-- [ ] Add log auto-follow support for active runs.
-- [ ] Add keyboard navigation, focus routing, and a help overlay.
-- [ ] Add responsive layout behavior for narrow terminals.
-- [ ] Add tests for artifact discovery and tolerant parsing of in-progress runs.
-- [ ] Add tests for key routing and screen-state transitions.
-- [ ] Add tests for active-run observer event handling.
-- [ ] Update user-facing documentation for launching and browsing runs in the TUI.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Add `crates/tui` and register it in the workspace.
+- [x] Add `ratatui` and the required terminal backend dependencies.
+- [x] Define TUI application state types for screens, focus, selections, and scroll positions.
+- [x] Add a `TaskLauncherScreen` that lists tasks and supports selecting one or more goal tasks.
+- [x] Add a run-start action that uses `RunEngine` to plan and execute a run from the TUI.
+- [x] Change artifact writing so task log files and `nao-events.jsonl` are appended during execution instead of only at completion.
+- [x] Unify engine execution around one parallel scheduler where `max_parallel_tasks=1` is treated as the sequential case.
+- [x] Align single-task worker-limit behavior with the parallel scheduler rather than preserving the current separate sequential path.
+- [x] Add run directory discovery under `.nao/runs`.
+- [x] Add parsing for `nao-summary.json`, `nao-events.jsonl`, and task log files.
+- [x] Add a `RunHistoryScreen` for browsing current and historical runs.
+- [x] Add a `RunDetailScreen` with summary, tasks, events, and task output panes.
+- [x] Add log auto-follow support for active runs.
+- [x] Add keyboard navigation, focus routing, and a help overlay.
+- [x] Add responsive layout behavior for narrow terminals.
+- [x] Add tests for artifact discovery and tolerant parsing of in-progress runs.
+- [x] Add tests for key routing and screen-state transitions.
+- [x] Add tests for active-run observer event handling.
+- [x] Update user-facing documentation for launching and browsing runs in the TUI.
+- [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
+
+The repository state reflects this work as complete.
+This cleanup pass did not replay the original feature rollout from scratch, but the repository-wide checks passed and the colocated TUI and artifact-store tests remain in place.
 
 Verification should include:
 

@@ -12,7 +12,10 @@ This plan describes how to fix those issues without turning the work into a gian
 
 # What is the current status?
 
-The current codebase is in decent shape and passes the repository checks, but it has a few correctness and maintainability gaps:
+The review follow-up work described in this plan has landed.
+This completed copy is retained as historical implementation context, not as a statement that the listed gaps still exist.
+
+Before the follow-up work landed, the codebase had these correctness and maintainability gaps:
 
 - `TaskFailure.elapsed_nanos` is currently populated using run-relative timing while some observer callbacks use task-relative timing
 - selectors containing `_` are treated as wildcard patterns, but task names are not validated to keep that syntax unambiguous
@@ -106,23 +109,26 @@ The recommended order is:
 
 # What concrete work items should be tracked?
 
-- [ ] Update task failure accounting so `elapsed_nanos` represents task runtime rather than run-relative time.
-- [ ] Keep failure rendering and observer callbacks aligned on elapsed-time semantics.
-- [ ] Add or update engine tests for dependency-delayed task failures so the reported duration matches the task runtime.
-- [ ] Reject task names containing `_` during recipe validation.
-- [ ] Document the selector wildcard rule and the task-name restriction in user-facing docs.
-- [ ] Add parser tests covering rejected `_` task names.
-- [ ] Change CLI task-list rendering to emit ANSI escapes only for interactive terminals.
-- [ ] Add runner tests for interactive and non-interactive `--list` output.
-- [ ] Avoid reloading run detail on every TUI refresh tick when no active run is changing.
-- [ ] Avoid reloading task logs on every TUI refresh tick when the selected task and run are unchanged.
-- [ ] Load run history summaries without parsing full run detail when summary data is available.
-- [ ] Add or update TUI/artifact-store tests covering the reduced reload behavior.
-- [ ] Add `docs/TESTING.md` with repository-specific testing guidance.
-- [ ] Update any stale documentation links or contributor instructions that mention testing guidance.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Update task failure accounting so `elapsed_nanos` represents task runtime rather than run-relative time.
+- [x] Keep failure rendering and observer callbacks aligned on elapsed-time semantics.
+- [x] Add or update engine tests for dependency-delayed task failures so the reported duration matches the task runtime.
+- [x] Reject task names containing `_` during recipe validation.
+- [x] Document the selector wildcard rule and the task-name restriction in user-facing docs.
+- [x] Add parser tests covering rejected `_` task names.
+- [x] Change CLI task-list rendering to emit ANSI escapes only for interactive terminals.
+- [x] Add runner tests for interactive and non-interactive `--list` output.
+- [x] Avoid reloading run detail on every TUI refresh tick when no active run is changing.
+- [x] Avoid reloading task logs on every TUI refresh tick when the selected task and run are unchanged.
+- [x] Load run history summaries without parsing full run detail when summary data is available.
+- [x] Add or update TUI/artifact-store tests covering the reduced reload behavior.
+- [x] Add `docs/TESTING.md` with repository-specific testing guidance.
+- [x] Update any stale documentation links or contributor instructions that mention testing guidance.
+- [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
+
+This cleanup pass did re-run `./scripts/check-code.sh`, and it passed.
+The checklist in this completed copy therefore matches both repository state and the verification rerun performed while finishing the follow-up work.
 
 Verification should include:
 

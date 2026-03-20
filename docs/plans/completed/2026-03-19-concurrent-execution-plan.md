@@ -6,7 +6,10 @@ This plan describes how to add concurrent task execution while preserving determ
 
 # What is the current status?
 
-The repository currently has:
+The repository now has the concurrent execution model described in this plan.
+This completed copy is retained as historical implementation context, not as a statement that the work is still pending.
+
+The implemented repository includes:
 
 - a planner that expands task selectors, validates dependency order, and produces one topologically ordered task list
 - a synchronous engine execution loop in `crates/engine/src/run_engine.rs`
@@ -170,27 +173,30 @@ The recommended order is:
 
 # What concrete work items should be tracked?
 
-- [ ] Add a new recipe config property for maximum concurrent tasks.
-- [ ] Add parser validation and defaults for the concurrency limit.
-- [ ] Introduce focused engine types for scheduler task state and scheduler bookkeeping.
-- [ ] Refactor task execution so one task run can be invoked independently from the outer run loop.
-- [ ] Build dependency metadata for planned tasks, including reverse edges and remaining prerequisite counts.
-- [ ] Add a ready queue and bounded worker scheduling loop to `nao-engine`.
-- [ ] Execute multiple tasks concurrently using engine-owned worker threads above the PAL boundary.
-- [ ] Record per-task started, finished, failed, and skipped state in a way that supports overlapping task lifetimes.
-- [ ] Preserve final output framing and per-task log file generation for concurrent runs.
-- [ ] Update `LinePerTask` live rendering so multiple tasks can be running at once.
-- [ ] Update `SingleLine` live rendering to summarize concurrent progress instead of assuming one active task.
-- [ ] Add engine tests for independent tasks running concurrently.
-- [ ] Add engine tests for dependency-gated scheduling where dependents start only after prerequisites finish.
-- [ ] Add engine tests for fail-fast scheduling with already running tasks allowed to complete.
-- [ ] Add engine tests for skipped-task accounting after a concurrent failure.
-- [ ] Add artifact tests for overlapping task start and finish events.
-- [ ] Add parser tests for the new concurrency config property.
-- [ ] Update recipe/config documentation.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Add a new recipe config property for maximum concurrent tasks.
+- [x] Add parser validation and defaults for the concurrency limit.
+- [x] Introduce focused engine types for scheduler task state and scheduler bookkeeping.
+- [x] Refactor task execution so one task run can be invoked independently from the outer run loop.
+- [x] Build dependency metadata for planned tasks, including reverse edges and remaining prerequisite counts.
+- [x] Add a ready queue and bounded worker scheduling loop to `nao-engine`.
+- [x] Execute multiple tasks concurrently using engine-owned worker threads above the PAL boundary.
+- [x] Record per-task started, finished, failed, and skipped state in a way that supports overlapping task lifetimes.
+- [x] Preserve final output framing and per-task log file generation for concurrent runs.
+- [x] Update `LinePerTask` live rendering so multiple tasks can be running at once.
+- [x] Update `SingleLine` live rendering to summarize concurrent progress instead of assuming one active task.
+- [x] Add engine tests for independent tasks running concurrently.
+- [x] Add engine tests for dependency-gated scheduling where dependents start only after prerequisites finish.
+- [x] Add engine tests for fail-fast scheduling with already running tasks allowed to complete.
+- [x] Add engine tests for skipped-task accounting after a concurrent failure.
+- [x] Add artifact tests for overlapping task start and finish events.
+- [x] Add parser tests for the new concurrency config property.
+- [x] Update recipe/config documentation.
+- [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
+
+The repository state reflects this work as complete.
+This cleanup pass did not re-run the original implementation sequence step by step, but the repository-wide checks passed after the follow-up documentation cleanup and the existing test coverage remains in place.
 
 Verification should include:
 
