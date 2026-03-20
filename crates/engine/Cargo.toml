@@ -10,9 +10,9 @@ repository = "https://github.com/manuel-woelker/nao"
 path = "src/lib.rs"
 
 [dependencies]
-nao-base = { path = "../base" }
-nao-pal = { path = "../pal" }
-nao-recipe = { path = "../recipe" }
+nao-base = { path = "../base", version = "0.1.0" }
+nao-pal = { path = "../pal", version = "0.1.0" }
+nao-recipe = { path = "../recipe", version = "0.1.0" }
 serde_json = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
 

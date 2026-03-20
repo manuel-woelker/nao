@@ -19,6 +19,7 @@ A task can be a shell command, a Bash script, a container invocation, or another
 ## What should I read next?
 
 See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for the higher-level project overview.
+See [`docs/RELEASE.md`](docs/RELEASE.md) for the release process.
 
 ## How can I use the TUI?
 
