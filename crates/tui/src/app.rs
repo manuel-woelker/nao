@@ -18,7 +18,7 @@ use nao_recipe::Task;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect, Size};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{
@@ -28,6 +28,7 @@ use std::collections::BTreeSet;
 use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
+use tui_scrollview::{ScrollView, ScrollViewState, ScrollbarVisibility};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Screen {
@@ -71,7 +72,7 @@ pub struct App {
     run_detail: Option<RunDetailRecord>,
     selected_run_task_index: usize,
     task_log_lines: Vec<SharedString>,
-    log_scroll: u16,
+    log_scroll_state: ScrollViewState,
     events_scroll: u16,
     summary_scroll: u16,
     auto_follow_log: bool,
@@ -103,7 +104,7 @@ impl App {
             run_detail: None,
             selected_run_task_index: 0,
             task_log_lines: Vec::new(),
-            log_scroll: 0,
+            log_scroll_state: ScrollViewState::new(),
             events_scroll: 0,
             summary_scroll: 0,
             auto_follow_log: true,
@@ -204,7 +205,7 @@ impl App {
         self.task_log_lines =
             load_task_log_lines(&*self.pal, &detail.run_directory, &task.log_file)?;
         if self.auto_follow_log {
-            self.log_scroll = self.max_log_scroll();
+            self.log_scroll_state.scroll_to_bottom();
         }
         Ok(())
     }
@@ -233,7 +234,7 @@ impl App {
             }
             KeyCode::Char('2') => {
                 self.screen = Screen::RunDetail;
-                self.focus = Focus::DetailTasks;
+                self.focus = Focus::DetailOutput;
                 return Ok(false);
             }
             KeyCode::Char('3') => {
@@ -286,7 +287,7 @@ impl App {
                     let run_directory = run.run_directory.clone();
                     self.open_run(&run_directory)?;
                     self.screen = Screen::RunDetail;
-                    self.focus = Focus::DetailTasks;
+                    self.focus = Focus::DetailOutput;
                 }
             }
             KeyCode::Char('R') => self.reload_history()?,
@@ -357,7 +358,10 @@ impl App {
         match self.focus {
             Focus::DetailTasks => self.move_selected_run_task(delta),
             Focus::DetailOutput => {
-                self.log_scroll = adjust_scroll(self.log_scroll, delta, self.max_log_scroll())
+                if delta != 0 {
+                    self.auto_follow_log = false;
+                }
+                self.adjust_log_scroll(delta);
             }
             Focus::DetailEvents => {
                 self.events_scroll =
@@ -373,7 +377,10 @@ impl App {
 
     fn scroll_current_pane_to_top(&mut self) {
         match self.focus {
-            Focus::DetailOutput => self.log_scroll = 0,
+            Focus::DetailOutput => {
+                self.auto_follow_log = false;
+                self.log_scroll_state.scroll_to_top();
+            }
             Focus::DetailEvents => self.events_scroll = 0,
             Focus::DetailSummary => self.summary_scroll = 0,
             Focus::DetailTasks => self.move_selected_run_task_to(0),
@@ -383,7 +390,10 @@ impl App {
 
     fn scroll_current_pane_to_bottom(&mut self) {
         match self.focus {
-            Focus::DetailOutput => self.log_scroll = self.max_log_scroll(),
+            Focus::DetailOutput => {
+                self.auto_follow_log = false;
+                self.log_scroll_state.scroll_to_bottom();
+            }
             Focus::DetailEvents => self.events_scroll = self.max_events_scroll(),
             Focus::DetailSummary => self.summary_scroll = self.max_summary_scroll(),
             Focus::DetailTasks => {
@@ -414,11 +424,16 @@ impl App {
         let _ = self.reload_selected_task_log();
     }
 
-    fn max_log_scroll(&self) -> u16 {
-        self.task_log_lines
-            .len()
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16
+    fn adjust_log_scroll(&mut self, delta: i32) {
+        if delta > 0 {
+            for _ in 0..delta {
+                self.log_scroll_state.scroll_down();
+            }
+        } else {
+            for _ in 0..delta.unsigned_abs() {
+                self.log_scroll_state.scroll_up();
+            }
+        }
     }
 
     fn max_events_scroll(&self) -> u16 {
@@ -535,7 +550,7 @@ impl App {
         self.refresh_open_run_detail()
     }
 
-    fn render(&self, frame: &mut Frame<'_>) {
+    fn render(&mut self, frame: &mut Frame<'_>) {
         match self.screen {
             Screen::Launcher => self.render_launcher(frame),
             Screen::RunHistory => self.render_history(frame),
@@ -787,7 +802,7 @@ impl App {
         );
     }
 
-    fn render_detail(&self, frame: &mut Frame<'_>) {
+    fn render_detail(&mut self, frame: &mut Frame<'_>) {
         let layout = top_level_layout(frame.area());
         let run_title = self
             .run_detail
@@ -805,11 +820,14 @@ impl App {
         self.render_footer(
             frame,
             layout[2],
-            "Tab pane | j/k move | Enter follow task | t/o/e/s focus | r history | L auto-follow | ? help | q quit",
+            &format!(
+                "Focus {} | Tab pane | j/k move | Enter follow task | t/o/e/s focus | r history | L auto-follow | ? help | q quit",
+                self.focus_label()
+            ),
         );
     }
 
-    fn render_wide_detail(&self, frame: &mut Frame<'_>, area: Rect) {
+    fn render_wide_detail(&mut self, frame: &mut Frame<'_>, area: Rect) {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
@@ -828,7 +846,7 @@ impl App {
         self.render_detail_summary(frame, bottom[1]);
     }
 
-    fn render_narrow_detail(&self, frame: &mut Frame<'_>, area: Rect) {
+    fn render_narrow_detail(&mut self, frame: &mut Frame<'_>, area: Rect) {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Min(1)])
@@ -882,8 +900,12 @@ impl App {
         StatefulWidget::render(list, area, frame.buffer_mut(), &mut list_state);
     }
 
-    fn render_detail_output(&self, frame: &mut Frame<'_>, area: Rect) {
-        let text = if self.task_log_lines.is_empty() {
+    fn render_detail_output(&mut self, frame: &mut Frame<'_>, area: Rect) {
+        if area.width < 2 || area.height < 2 {
+            return;
+        }
+
+        let content_lines = if self.task_log_lines.is_empty() {
             vec![Line::from("no task output yet")]
         } else {
             self.task_log_lines
@@ -891,23 +913,34 @@ impl App {
                 .map(|line| Line::from(line.as_str()))
                 .collect::<Vec<_>>()
         };
+        let content_width = content_lines
+            .iter()
+            .map(|line| line.width() as u16)
+            .max()
+            .unwrap_or(1);
+        let content_height = content_lines.len().min(u16::MAX as usize) as u16;
+        let inner_area =
+            focused_block("Task Output", self.focus == Focus::DetailOutput).inner(area);
+        let visible_height = inner_area.height.max(1);
+        let max_vertical_offset = content_height.saturating_sub(visible_height);
+        let current_offset = self.log_scroll_state.offset();
+        self.log_scroll_state.set_offset(Position::new(
+            current_offset.x,
+            current_offset.y.min(max_vertical_offset),
+        ));
+
+        let content_size = Size::new(content_width.max(inner_area.width), content_height.max(1));
+        let mut scroll_view =
+            ScrollView::new(content_size).scrollbars_visibility(ScrollbarVisibility::Automatic);
+        scroll_view.render_widget(
+            Paragraph::new(content_lines).wrap(Wrap { trim: false }),
+            Rect::new(0, 0, content_size.width, content_size.height),
+        );
         frame.render_widget(
-            Paragraph::new(text)
-                .block(focused_block(
-                    "Task Output",
-                    self.focus == Focus::DetailOutput,
-                ))
-                .scroll((
-                    clamp_scroll_for_viewport(
-                        self.log_scroll,
-                        self.task_log_lines.len(),
-                        area.height,
-                    ),
-                    0,
-                ))
-                .wrap(Wrap { trim: false }),
+            focused_block("Task Output", self.focus == Focus::DetailOutput),
             area,
         );
+        frame.render_stateful_widget(scroll_view, inner_area, &mut self.log_scroll_state);
     }
 
     fn render_detail_events(&self, frame: &mut Frame<'_>, area: Rect) {
@@ -1028,6 +1061,19 @@ impl App {
             area,
         );
     }
+
+    fn focus_label(&self) -> &'static str {
+        match self.focus {
+            Focus::LauncherTasks => "launcher tasks",
+            Focus::LauncherDetails => "launcher details",
+            Focus::HistoryRuns => "history runs",
+            Focus::HistoryDetails => "history details",
+            Focus::DetailTasks => "detail tasks",
+            Focus::DetailOutput => "task output",
+            Focus::DetailEvents => "events",
+            Focus::DetailSummary => "summary",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1100,14 +1146,6 @@ fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
 fn adjust_scroll(current: u16, delta: i32, max: u16) -> u16 {
     let next = current as i32 + delta;
     next.clamp(0, max as i32) as u16
-}
-
-fn clamp_scroll_for_viewport(current: u16, line_count: usize, area_height: u16) -> u16 {
-    let visible_lines = area_height.saturating_sub(2) as usize;
-    let max_scroll = line_count
-        .saturating_sub(visible_lines)
-        .min(u16::MAX as usize) as u16;
-    current.min(max_scroll)
 }
 
 fn spinner_frames() -> &'static [&'static str] {
@@ -1283,6 +1321,17 @@ mod tests {
         app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))
             .unwrap();
         assert_eq!(app.focus, Focus::DetailTasks);
+    }
+
+    #[test]
+    fn hotkey_two_defaults_run_detail_to_output_focus() {
+        let mut app = test_app();
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE))
+            .unwrap();
+
+        assert_eq!(app.screen, Screen::RunDetail);
+        assert_eq!(app.focus, Focus::DetailOutput);
     }
 
     #[test]

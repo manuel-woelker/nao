@@ -25,6 +25,7 @@ ignore = "0.4.24"
 notify-debouncer-full = "0.5.0"
 relative-path = "1.9.3"
 ratatui = "0.29.0"
+tui-scrollview = "0.5.1"
 crossterm = "0.28.1"
 time = "0.3.41"
 
