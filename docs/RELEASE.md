@@ -28,18 +28,36 @@ Before running `./scripts/release.sh`, make sure:
 
 The script checks these conditions itself and fails fast if any of them are wrong.
 
+# How should a release be prepared?
+
+First, bump the shared crate version with:
+
+```bash
+./scripts/release.sh prepare 0.1.1
+```
+
+That command updates:
+
+- the package version in every publishable crate manifest
+- the internal dependency version pins between workspace crates
+
+It does not commit anything for you.
+That part should stay explicit so the version bump is reviewable and the release tag points at a real commit, not some weird local-only state.
+
+After `prepare`, review the manifest changes and commit them on `main`.
+
 # How should a release be created?
 
 Run:
 
 ```bash
-./scripts/release.sh
+./scripts/release.sh publish
 ```
 
 If you want to validate the release without publishing or tagging, run:
 
 ```bash
-./scripts/release.sh --dry-run
+./scripts/release.sh publish --dry-run
 ```
 
 The script will:
@@ -55,6 +73,9 @@ The script will:
 The tag is created only after all publishes succeed.
 That is deliberate.
 Publishing first avoids creating a public GitHub release for a version whose crates only half-published.
+
+The publish step also fails early if any crate already exists on crates.io at the selected shared version.
+That is much better than discovering it halfway through dependency verification like an idiot.
 
 # What crates are published and in what order?
 

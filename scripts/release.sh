@@ -7,6 +7,8 @@ RELEASE_BRANCH="${NAO_RELEASE_BRANCH:-main}"
 WAIT_ATTEMPTS="${NAO_RELEASE_WAIT_ATTEMPTS:-30}"
 WAIT_SECONDS="${NAO_RELEASE_WAIT_SECONDS:-10}"
 DRY_RUN=0
+MODE="publish"
+TARGET_VERSION=""
 
 CRATE_DIRS=(
   "crates/base"
@@ -28,7 +30,10 @@ CRATE_PACKAGES=(
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/release.sh [--dry-run]
+Usage:
+  ./scripts/release.sh prepare <version>
+  ./scripts/release.sh publish [--dry-run]
+  ./scripts/release.sh [--dry-run]
 
 Options:
   --dry-run    Run all pre-release checks and cargo publish dry runs without
@@ -65,6 +70,11 @@ crate_version() {
 
 release_version() {
   crate_version "crates/cli"
+}
+
+validate_version() {
+  local version="$1"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || fail "invalid version: $version"
 }
 
 current_branch() {
@@ -104,6 +114,25 @@ assert_tag_absent() {
   fi
 }
 
+crate_version_exists_on_crates_io() {
+  local package_name="$1"
+  local version="$2"
+  local url="https://crates.io/api/v1/crates/$package_name/$version"
+
+  curl --fail --silent --show-error "$url" >/dev/null 2>&1
+}
+
+assert_release_version_available() {
+  local version="$1"
+  local package_name
+
+  for package_name in "${CRATE_PACKAGES[@]}"; do
+    if crate_version_exists_on_crates_io "$package_name" "$version"; then
+      fail "$package_name $version already exists on crates.io; bump the shared version before publishing"
+    fi
+  done
+}
+
 assert_shared_version() {
   local expected_version="$1"
   local crate_dir
@@ -133,6 +162,42 @@ assert_internal_dependency_versions() {
       [[ "$dependency_version" == "$expected_version" ]] || fail "$manifest_path pins $dependency_name to $dependency_version, expected $expected_version"
     done < <(grep -E '^[a-z0-9-]+[[:space:]]*=.*path[[:space:]]*=' "$manifest_path" || true)
   done
+}
+
+update_manifest_version() {
+  local manifest_path="$1"
+  local version="$2"
+
+  sed -E -i \
+    -e "0,/^version[[:space:]]*=[[:space:]]*\"[^\"]+\"$/s//version = \"$version\"/" \
+    -e "/path[[:space:]]*=/ s/version[[:space:]]*=[[:space:]]*\"[^\"]+\"/version = \"$version\"/g" \
+    "$manifest_path"
+}
+
+prepare_release_version() {
+  local version="$1"
+  local manifest_path
+  local current_version
+
+  validate_version "$version"
+  current_version="$(release_version)"
+  [[ "$current_version" != "$version" ]] || fail "workspace already uses version $version"
+
+  require_tool git
+  require_tool sed
+  assert_clean_worktree
+
+  for crate_dir in "${CRATE_DIRS[@]}"; do
+    manifest_path="$ROOT_DIR/$crate_dir/Cargo.toml"
+    log "updating $manifest_path to version $version"
+    update_manifest_version "$manifest_path" "$version"
+  done
+
+  assert_shared_version "$version"
+  assert_internal_dependency_versions "$version"
+
+  log "prepared shared release version $version"
+  log "review the manifest changes, commit them, then run ./scripts/release.sh publish"
 }
 
 run_repo_checks() {
@@ -216,6 +281,7 @@ run_pre_release_checks() {
   assert_clean_worktree
   assert_shared_version "$version"
   assert_internal_dependency_versions "$version"
+  assert_release_version_available "$version"
   run_repo_checks
   assert_clean_worktree
   run_publish_dry_runs
@@ -227,25 +293,54 @@ run_pre_release_checks() {
 }
 
 parse_args() {
-  while [[ $# -gt 0 ]]; do
+  if [[ $# -gt 0 ]]; then
     case "$1" in
-      --dry-run)
-        DRY_RUN=1
+      prepare|publish)
+        MODE="$1"
+        shift
         ;;
       --help)
         usage
         exit 0
         ;;
-      *)
-        fail "unknown argument: $1"
-        ;;
     esac
-    shift
-  done
+  fi
+
+  case "$MODE" in
+    prepare)
+      [[ $# -eq 1 ]] || fail "prepare requires exactly one version argument"
+      TARGET_VERSION="$1"
+      ;;
+    publish)
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --dry-run)
+            DRY_RUN=1
+            ;;
+          --help)
+            usage
+            exit 0
+            ;;
+          *)
+            fail "unknown argument: $1"
+            ;;
+        esac
+        shift
+      done
+      ;;
+    *)
+      fail "unknown mode: $MODE"
+      ;;
+  esac
 }
 
 main() {
   parse_args "$@"
+
+  if [[ "$MODE" == "prepare" ]]; then
+    prepare_release_version "$TARGET_VERSION"
+    return
+  fi
 
   local version
   version="$(release_version)"
