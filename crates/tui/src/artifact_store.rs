@@ -212,8 +212,26 @@ pub fn load_task_log_lines(
     let content = pal.read_file_to_string(&full_path)?;
     Ok(content
         .lines()
-        .map(SharedString::from)
+        .map(strip_log_metadata_prefix)
         .collect::<Vec<SharedString>>())
+}
+
+fn strip_log_metadata_prefix(line: &str) -> SharedString {
+    let Some(after_timestamp) = line
+        .strip_prefix('[')
+        .and_then(|line| line.split_once("] "))
+    else {
+        return SharedString::from(line);
+    };
+    let (_, remainder) = after_timestamp;
+    let Some((stream_name, message)) = remainder.split_once(": ") else {
+        return SharedString::from(remainder);
+    };
+    if matches!(stream_name, "stdout" | "stderr") {
+        SharedString::from(message)
+    } else {
+        SharedString::from(remainder)
+    }
 }
 
 fn load_run_summary(pal: &dyn Pal, run_directory: &FilePath) -> NaoResult<RunSummaryRecord> {
@@ -527,8 +545,36 @@ test pending"#
             .join("\n");
 
         expect![
-            r#"[2026-03-19T12:00:01Z] stdout: compiling
-[2026-03-19T12:00:02Z] stdout: linking"#
+            r#"compiling
+linking"#
+        ]
+        .assert_eq(&rendered);
+    }
+
+    #[test]
+    fn preserves_plain_log_lines_without_metadata_prefix() {
+        let pal = PalMock::new();
+        pal.set_file(
+            ".nao/runs/2026-03-19T12-00-00Z-test/build.log",
+            "plain line\nstderr but no timestamp prefix\n",
+        );
+
+        let lines = load_task_log_lines(
+            &pal,
+            &FilePath::from(".nao/runs/2026-03-19T12-00-00Z-test"),
+            &FilePath::from("build.log"),
+        )
+        .unwrap();
+
+        let rendered = lines
+            .iter()
+            .map(|line| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        expect![
+            r#"plain line
+stderr but no timestamp prefix"#
         ]
         .assert_eq(&rendered);
     }

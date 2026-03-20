@@ -41,6 +41,7 @@ enum Screen {
 enum Focus {
     LauncherTasks,
     LauncherDetails,
+    LauncherFailureOutput,
     HistoryRuns,
     HistoryDetails,
     DetailTasks,
@@ -70,6 +71,9 @@ pub struct App {
     selected_run_index: usize,
     open_run_directory: Option<FilePath>,
     run_detail: Option<RunDetailRecord>,
+    launcher_failed_task_name: Option<SharedString>,
+    launcher_failed_task_log_lines: Vec<SharedString>,
+    launcher_log_scroll_state: ScrollViewState,
     selected_run_task_index: usize,
     task_log_lines: Vec<SharedString>,
     log_scroll_state: ScrollViewState,
@@ -102,6 +106,9 @@ impl App {
             selected_run_index: 0,
             open_run_directory: None,
             run_detail: None,
+            launcher_failed_task_name: None,
+            launcher_failed_task_log_lines: Vec::new(),
+            launcher_log_scroll_state: ScrollViewState::new(),
             selected_run_task_index: 0,
             task_log_lines: Vec::new(),
             log_scroll_state: ScrollViewState::new(),
@@ -179,6 +186,7 @@ impl App {
             return Ok(());
         };
         self.run_detail = Some(load_run_detail(&*self.pal, run_directory)?);
+        self.reload_launcher_failed_task_log()?;
         if let Some(detail) = &self.run_detail {
             if detail.tasks.is_empty() {
                 self.selected_run_task_index = 0;
@@ -189,6 +197,31 @@ impl App {
                     .min(detail.tasks.len().saturating_sub(1));
                 self.reload_selected_task_log()?;
             }
+        }
+        Ok(())
+    }
+
+    fn reload_launcher_failed_task_log(&mut self) -> NaoResult<()> {
+        let Some(detail) = &self.run_detail else {
+            self.launcher_failed_task_name = None;
+            self.launcher_failed_task_log_lines.clear();
+            return Ok(());
+        };
+        let Some(task) = detail
+            .tasks
+            .iter()
+            .find(|task| task.status.as_str() == "failed")
+        else {
+            self.launcher_failed_task_name = None;
+            self.launcher_failed_task_log_lines.clear();
+            return Ok(());
+        };
+        let failed_task_changed = self.launcher_failed_task_name.as_ref() != Some(&task.name);
+        self.launcher_failed_task_name = Some(task.name.clone());
+        self.launcher_failed_task_log_lines =
+            load_task_log_lines(&*self.pal, &detail.run_directory, &task.log_file)?;
+        if failed_task_changed {
+            self.launcher_log_scroll_state.scroll_to_bottom();
         }
         Ok(())
     }
@@ -264,8 +297,17 @@ impl App {
 
     fn handle_launcher_key(&mut self, key_event: KeyEvent) -> NaoResult<()> {
         match key_event.code {
-            KeyCode::Down | KeyCode::Char('j') => self.move_launcher_selection(1),
-            KeyCode::Up | KeyCode::Char('k') => self.move_launcher_selection(-1),
+            KeyCode::Char('o') if self.show_launcher_failure_output() => {
+                self.focus = Focus::LauncherFailureOutput;
+            }
+            KeyCode::Char('g') if key_event.modifiers.is_empty() => {
+                self.scroll_launcher_pane_to_top();
+            }
+            KeyCode::Char('G') | KeyCode::End => self.scroll_launcher_pane_to_bottom(),
+            KeyCode::PageDown => self.scroll_launcher_pane(10),
+            KeyCode::PageUp => self.scroll_launcher_pane(-10),
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_launcher_pane(1),
+            KeyCode::Up | KeyCode::Char('k') => self.scroll_launcher_pane(-1),
             KeyCode::Char(' ') => self.toggle_selected_goal(),
             KeyCode::Enter => self.start_run()?,
             KeyCode::Char('r') => {
@@ -276,6 +318,26 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn scroll_launcher_pane(&mut self, delta: i32) {
+        match self.focus {
+            Focus::LauncherTasks => self.move_launcher_selection(delta as isize),
+            Focus::LauncherFailureOutput => self.adjust_launcher_log_scroll(delta),
+            _ => {}
+        }
+    }
+
+    fn scroll_launcher_pane_to_top(&mut self) {
+        if self.focus == Focus::LauncherFailureOutput {
+            self.launcher_log_scroll_state.scroll_to_top();
+        }
+    }
+
+    fn scroll_launcher_pane_to_bottom(&mut self) {
+        if self.focus == Focus::LauncherFailureOutput {
+            self.launcher_log_scroll_state.scroll_to_bottom();
+        }
     }
 
     fn handle_history_key(&mut self, key_event: KeyEvent) -> NaoResult<()> {
@@ -436,6 +498,18 @@ impl App {
         }
     }
 
+    fn adjust_launcher_log_scroll(&mut self, delta: i32) {
+        if delta > 0 {
+            for _ in 0..delta {
+                self.launcher_log_scroll_state.scroll_down();
+            }
+        } else {
+            for _ in 0..delta.unsigned_abs() {
+                self.launcher_log_scroll_state.scroll_up();
+            }
+        }
+    }
+
     fn max_events_scroll(&self) -> u16 {
         self.run_detail
             .as_ref()
@@ -450,6 +524,12 @@ impl App {
 
     fn cycle_focus(&mut self, reverse: bool) {
         let order = match self.screen {
+            Screen::Launcher if self.show_launcher_failure_output() => [
+                Focus::LauncherTasks,
+                Focus::LauncherDetails,
+                Focus::LauncherFailureOutput,
+            ]
+            .as_slice(),
             Screen::Launcher => [Focus::LauncherTasks, Focus::LauncherDetails].as_slice(),
             Screen::RunHistory => [Focus::HistoryRuns, Focus::HistoryDetails].as_slice(),
             Screen::RunDetail => [
@@ -561,7 +641,7 @@ impl App {
         }
     }
 
-    fn render_launcher(&self, frame: &mut Frame<'_>) {
+    fn render_launcher(&mut self, frame: &mut Frame<'_>) {
         let layout = top_level_layout(frame.area());
         self.render_header(
             frame,
@@ -580,6 +660,17 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
             .split(body[0]);
+        let right = if self.show_launcher_failure_output() {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+                .split(body[1])
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(100)])
+                .split(body[1])
+        };
         let items = self
             .tasks
             .iter()
@@ -638,7 +729,10 @@ impl App {
             ))
             .wrap(Wrap { trim: false });
         frame.render_widget(details, left[1]);
-        self.render_launcher_progress(frame, body[1]);
+        self.render_launcher_progress(frame, right[0]);
+        if self.show_launcher_failure_output() {
+            self.render_launcher_failed_output(frame, right[1]);
+        }
 
         let selected_goals = if self.selected_goals.is_empty() {
             "-".to_owned()
@@ -650,7 +744,7 @@ impl App {
                 .join(", ")
         };
         let footer_text = format!(
-            "Selected goals: {selected_goals} | Space toggle | Enter start run | r history | ? help | q quit"
+            "Selected goals: {selected_goals} | Space toggle | Enter start run | r history | o failed output | ? help | q quit"
         );
         self.render_footer(frame, layout[2], &footer_text);
     }
@@ -734,11 +828,28 @@ impl App {
             Line::from("  Space: toggle explicit goal selection"),
             Line::from("  Enter: start selected task"),
             Line::from("  Tab: switch pane focus"),
+            Line::from("  o: focus failed task output"),
             Line::from("  r: open run history"),
             Line::from("  2: open run detail"),
             Line::from("  ?: open help"),
             Line::from("  q: quit"),
         ]
+    }
+
+    fn render_launcher_failed_output(&mut self, frame: &mut Frame<'_>, area: Rect) {
+        let title = self
+            .launcher_failed_task_name
+            .as_ref()
+            .map(|task_name| format!("Failed Task Output: {}", task_name.as_str()))
+            .unwrap_or_else(|| "Failed Task Output".to_owned());
+        Self::render_scrollable_output(
+            frame,
+            area,
+            &title,
+            self.focus == Focus::LauncherFailureOutput,
+            &self.launcher_failed_task_log_lines,
+            &mut self.launcher_log_scroll_state,
+        );
     }
 
     fn render_history(&self, frame: &mut Frame<'_>) {
@@ -901,46 +1012,14 @@ impl App {
     }
 
     fn render_detail_output(&mut self, frame: &mut Frame<'_>, area: Rect) {
-        if area.width < 2 || area.height < 2 {
-            return;
-        }
-
-        let content_lines = if self.task_log_lines.is_empty() {
-            vec![Line::from("no task output yet")]
-        } else {
-            self.task_log_lines
-                .iter()
-                .map(|line| Line::from(line.as_str()))
-                .collect::<Vec<_>>()
-        };
-        let content_width = content_lines
-            .iter()
-            .map(|line| line.width() as u16)
-            .max()
-            .unwrap_or(1);
-        let content_height = content_lines.len().min(u16::MAX as usize) as u16;
-        let inner_area =
-            focused_block("Task Output", self.focus == Focus::DetailOutput).inner(area);
-        let visible_height = inner_area.height.max(1);
-        let max_vertical_offset = content_height.saturating_sub(visible_height);
-        let current_offset = self.log_scroll_state.offset();
-        self.log_scroll_state.set_offset(Position::new(
-            current_offset.x,
-            current_offset.y.min(max_vertical_offset),
-        ));
-
-        let content_size = Size::new(content_width.max(inner_area.width), content_height.max(1));
-        let mut scroll_view =
-            ScrollView::new(content_size).scrollbars_visibility(ScrollbarVisibility::Automatic);
-        scroll_view.render_widget(
-            Paragraph::new(content_lines).wrap(Wrap { trim: false }),
-            Rect::new(0, 0, content_size.width, content_size.height),
-        );
-        frame.render_widget(
-            focused_block("Task Output", self.focus == Focus::DetailOutput),
+        Self::render_scrollable_output(
+            frame,
             area,
+            "Task Output",
+            self.focus == Focus::DetailOutput,
+            &self.task_log_lines,
+            &mut self.log_scroll_state,
         );
-        frame.render_stateful_widget(scroll_view, inner_area, &mut self.log_scroll_state);
     }
 
     fn render_detail_events(&self, frame: &mut Frame<'_>, area: Rect) {
@@ -1066,6 +1145,7 @@ impl App {
         match self.focus {
             Focus::LauncherTasks => "launcher tasks",
             Focus::LauncherDetails => "launcher details",
+            Focus::LauncherFailureOutput => "launcher failed output",
             Focus::HistoryRuns => "history runs",
             Focus::HistoryDetails => "history details",
             Focus::DetailTasks => "detail tasks",
@@ -1073,6 +1153,61 @@ impl App {
             Focus::DetailEvents => "events",
             Focus::DetailSummary => "summary",
         }
+    }
+
+    fn show_launcher_failure_output(&self) -> bool {
+        self.run_detail
+            .as_ref()
+            .map(|detail| {
+                detail.result.as_str() == "failed" && self.launcher_failed_task_name.is_some()
+            })
+            .unwrap_or(false)
+    }
+
+    fn render_scrollable_output(
+        frame: &mut Frame<'_>,
+        area: Rect,
+        title: &str,
+        focused: bool,
+        lines: &[SharedString],
+        scroll_state: &mut ScrollViewState,
+    ) {
+        if area.width < 2 || area.height < 2 {
+            return;
+        }
+
+        let content_lines = if lines.is_empty() {
+            vec![Line::from("no task output yet")]
+        } else {
+            lines
+                .iter()
+                .map(|line| Line::from(line.as_str()))
+                .collect::<Vec<_>>()
+        };
+        let content_width = content_lines
+            .iter()
+            .map(|line| line.width() as u16)
+            .max()
+            .unwrap_or(1);
+        let content_height = content_lines.len().min(u16::MAX as usize) as u16;
+        let inner_area = focused_block(title, focused).inner(area);
+        let visible_height = inner_area.height.max(1);
+        let max_vertical_offset = content_height.saturating_sub(visible_height);
+        let current_offset = scroll_state.offset();
+        scroll_state.set_offset(Position::new(
+            current_offset.x,
+            current_offset.y.min(max_vertical_offset),
+        ));
+
+        let content_size = Size::new(content_width.max(inner_area.width), content_height.max(1));
+        let mut scroll_view =
+            ScrollView::new(content_size).scrollbars_visibility(ScrollbarVisibility::Automatic);
+        scroll_view.render_widget(
+            Paragraph::new(content_lines).wrap(Wrap { trim: false }),
+            Rect::new(0, 0, content_size.width, content_size.height),
+        );
+        frame.render_widget(focused_block(title, focused), area);
+        frame.render_stateful_widget(scroll_view, inner_area, scroll_state);
     }
 }
 
@@ -1181,6 +1316,7 @@ mod tests {
     use super::{App, Focus, Screen, pretty_duration, render_task_state_emoji};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use nao_base::file_path::FilePath;
+    use nao_base::shared_string::SharedString;
     use nao_base::timestamp::Timestamp;
     use nao_pal::pal::PalHandle;
     use nao_pal::pal_mock::PalMock;
@@ -1332,6 +1468,55 @@ mod tests {
 
         assert_eq!(app.screen, Screen::RunDetail);
         assert_eq!(app.focus, Focus::DetailOutput);
+    }
+
+    #[test]
+    fn launcher_shows_failed_task_output_for_failed_runs() {
+        let pal = PalMock::new();
+        pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "build" description="Build" {
+                run script="./scripts/build.sh"
+              }
+            }
+            "#,
+        );
+        pal.set_file(
+            ".nao/runs/2026-03-20T10-00-00Z-build/nao-summary.json",
+            r#"{
+              "result":"failed",
+              "failure_message":"boom",
+              "run":{"requested_tasks":["build"],"duration_nanos":"10"},
+              "tasks":[
+                {
+                  "name":"build",
+                  "status":"failed",
+                  "result":"failed",
+                  "exit_code":1,
+                  "duration_nanos":"10",
+                  "log_file":"build.log"
+                }
+              ]
+            }"#,
+        );
+        pal.set_file(
+            ".nao/runs/2026-03-20T10-00-00Z-build/build.log",
+            "[2026-03-20T10:00:01Z] stderr: compile failed\n",
+        );
+
+        let mut app = App::new(PalHandle::new(pal), FilePath::from("nao.kdl")).unwrap();
+        app.open_run(&FilePath::from(".nao/runs/2026-03-20T10-00-00Z-build"))
+            .unwrap();
+
+        assert!(app.show_launcher_failure_output());
+        assert_eq!(app.launcher_failed_task_name.as_deref(), Some("build"));
+        assert_eq!(
+            app.launcher_failed_task_log_lines,
+            vec![SharedString::from("compile failed")]
+        );
     }
 
     #[test]
