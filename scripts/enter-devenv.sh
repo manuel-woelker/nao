@@ -12,7 +12,7 @@ fi
 cd "$ROOT_DIR"
 
 if [[ $# -eq 0 ]]; then
-  exec devenv shell
+  exec devenv shell --clean TERM,COLORTERM,DISPLAY,WAYLAND_DISPLAY,XAUTHORITY,SSH_AUTH_SOCK
 fi
 
-exec devenv shell -- "$@"
+exec devenv shell --clean TERM,COLORTERM,DISPLAY,WAYLAND_DISPLAY,XAUTHORITY,SSH_AUTH_SOCK -- "$@"
