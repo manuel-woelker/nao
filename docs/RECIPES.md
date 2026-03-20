@@ -39,6 +39,20 @@ In practice, that means a task definition will usually include:
 - Optional environment variables
 - Optional artifact declarations
 
+# What naming rules apply to tasks?
+
+Task names should be simple literal identifiers that are easy to type on the command line.
+
+Today, task names must not contain `_`.
+`nao` reserves `_` for wildcard task selectors such as `test_`, which can match multiple tasks without forcing shell quoting.
+
+For example:
+
+- `test_` can match tasks whose names start with `test`
+- `lint` remains an exact task name
+
+If you need multi-word task names, prefer `-` over `_`.
+
 # How are dependencies expressed?
 
 Dependencies are expressed by naming prerequisite tasks in the task definition. This keeps the graph explicit and easy to inspect in code review.

@@ -424,6 +424,16 @@ fn parse_artifact(
 fn validate_tasks(source: &str, tasks: &[Task], task_nodes: &[KdlNode]) -> Result<(), RecipeError> {
     let mut names = BTreeSet::new();
     for (task, task_node) in tasks.iter().zip(task_nodes) {
+        if task.name.as_str().contains('_') {
+            return Err(recipe_error_for_node(
+                source,
+                task_node,
+                format!(
+                    "task name `{}` cannot contain `_` because `_` is reserved for wildcard task selectors",
+                    task.name.as_str()
+                ),
+            ));
+        }
         if !names.insert(task.name.as_str().to_owned()) {
             return Err(recipe_error_for_node(
                 source,
@@ -722,6 +732,24 @@ mod tests {
                 .to_test_string()
                 .contains("duplicate task name `build`")
         );
+    }
+
+    #[test]
+    fn rejects_task_names_with_underscores() {
+        let error = parse_recipe(
+            r#"
+            recipe "default" {
+              task "unit_tests" {
+                run shell="cargo test"
+              }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_test_string().contains(
+            "task name `unit_tests` cannot contain `_` because `_` is reserved for wildcard task selectors"
+        ));
     }
 
     #[test]
