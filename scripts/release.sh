@@ -231,21 +231,6 @@ run_repo_checks() {
   "$ROOT_DIR/scripts/check-code.sh"
 }
 
-run_package_checks() {
-  local crate_dir
-  local package_name
-  local index
-
-  for index in "${!CRATE_DIRS[@]}"; do
-    crate_dir="${CRATE_DIRS[$index]}"
-    package_name="${CRATE_PACKAGES[$index]}"
-    log "running cargo package for $package_name"
-    cargo package \
-      --manifest-path "$ROOT_DIR/$crate_dir/Cargo.toml" \
-      --locked
-  done
-}
-
 wait_for_crate_version() {
   local package_name="$1"
   local version="$2"
@@ -309,7 +294,6 @@ run_pre_release_checks() {
   assert_release_version_available "$version"
   run_repo_checks
   assert_clean_worktree
-  run_package_checks
 
   if [[ "$DRY_RUN" -eq 0 ]]; then
     assert_publish_auth
@@ -392,6 +376,7 @@ main() {
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "dry run completed; skipping publish, tag creation, and push"
+    log "note: Cargo cannot fully preflight dependent workspace crates against crates.io before their sibling versions are published"
     return
   fi
 
