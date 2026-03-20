@@ -82,6 +82,7 @@ Activate it with:
 
 ```bash
 flox activate
+./dev-shell.sh
 ```
 
 The environment keeps Cargo state inside `.flox/cache`, which helps isolate builds from host machine state and keeps local sandboxing predictable.
@@ -89,6 +90,9 @@ The environment keeps Cargo state inside `.flox/cache`, which helps isolate buil
 Common workflows:
 
 ```bash
+./dev-shell.sh ./scripts/check-code.sh
+./dev-shell.sh cargo build --workspace
+./dev-shell.sh cargo nextest run --workspace --all-targets --all-features
 flox activate -- ./scripts/check-code.sh
 flox activate -- cargo build --workspace
 flox activate -- cargo nextest run --workspace --all-targets --all-features
@@ -96,6 +100,7 @@ flox activate -- cargo nextest run --workspace --all-targets --all-features
 
 Use Flox when you want a reproducible local toolchain without opening the devcontainer.
 Use the devcontainer when you want a fully containerized editor or CLI environment.
+Use [`./dev-shell.sh`](./dev-shell.sh) when you want the shortest path into the checked-in Flox environment.
 
 ## How can I run Codex with less host filesystem access?
 
