@@ -617,7 +617,10 @@ mod tests {
             has_uncommitted_changes: false,
         });
 
-        assert_eq!(rendered, "0.1.3-2026-03-21-abc1234");
+        assert_eq!(
+            rendered,
+            format!("{}-2026-03-21-abc1234", env!("CARGO_PKG_VERSION"))
+        );
     }
 
     #[test]
@@ -628,7 +631,10 @@ mod tests {
             has_uncommitted_changes: true,
         });
 
-        assert_eq!(rendered, "0.1.3-2026-03-21-abc1234-dev");
+        assert_eq!(
+            rendered,
+            format!("{}-2026-03-21-abc1234-dev", env!("CARGO_PKG_VERSION"))
+        );
     }
 
     #[test]
