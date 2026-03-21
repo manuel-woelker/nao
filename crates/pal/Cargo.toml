@@ -1,13 +1,13 @@
 [package]
 name = "nao-pal"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "Platform abstraction layer for the nao task runner"
 license = "MIT"
 repository = "https://github.com/manuel-woelker/nao"
 
 [dependencies]
-nao-base = { path = "../base", version = "0.1.3" }
+nao-base = { path = "../base", version = "0.1.4" }
 expect-test = {workspace = true}
 ignore = {workspace = true}
 notify-debouncer-full = {workspace = true}
