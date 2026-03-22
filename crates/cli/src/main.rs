@@ -22,6 +22,8 @@ xflags::xflags! {
         optional --list
         /// Open the terminal UI.
         optional --tui
+        /// Run with CI-friendly logging and a final task-log summary.
+        optional --ci
         /// Print build-time version metadata.
         optional --version
         /// Load a recipe file other than `nao.kdl`.
@@ -79,6 +81,8 @@ where
         return Ok(ExitCode::SUCCESS);
     }
 
+    validate_ci_request(&flags)?;
+
     if should_run_tui(&flags) {
         validate_tui_request(&flags)?;
         let recipe_path = flags
@@ -91,14 +95,20 @@ where
 
     let recipe_path = flags.config.unwrap_or_else(|| PathBuf::from("nao.kdl"));
     let runner = Runner::new(pal);
-    let output = runner.execute(&FilePath::new(&recipe_path), flags.list, &flags.task_name)?;
+    let output = runner.execute(
+        &FilePath::new(&recipe_path),
+        flags.list,
+        flags.ci,
+        &flags.task_name,
+    )?;
 
     print!("{}", output.output);
     Ok(output.exit_code)
 }
 
 fn should_run_tui(flags: &Nao) -> bool {
-    flags.tui || (!flags.version && !flags.init && !flags.list && flags.task_name.is_empty())
+    (flags.tui || (!flags.version && !flags.init && !flags.list && flags.task_name.is_empty()))
+        && !flags.ci
 }
 
 fn validate_tui_request(flags: &Nao) -> NaoResult<()> {
@@ -107,6 +117,13 @@ fn validate_tui_request(flags: &Nao) -> NaoResult<()> {
     }
     if !flags.task_name.is_empty() {
         return Err(err!("--tui cannot be combined with task names"));
+    }
+    Ok(())
+}
+
+fn validate_ci_request(flags: &Nao) -> NaoResult<()> {
+    if flags.ci && flags.tui {
+        return Err(err!("--ci cannot be combined with --tui"));
     }
     Ok(())
 }
@@ -120,6 +137,9 @@ fn validate_version_request(flags: &Nao) -> NaoResult<()> {
     }
     if flags.tui {
         return Err(err!("--version cannot be combined with --tui"));
+    }
+    if flags.ci {
+        return Err(err!("--version cannot be combined with --ci"));
     }
     if flags.config.is_some() {
         return Err(err!("--version cannot be combined with --config"));
@@ -136,6 +156,9 @@ fn validate_init_request(flags: &Nao) -> NaoResult<()> {
     }
     if flags.tui {
         return Err(err!("--init cannot be combined with --tui"));
+    }
+    if flags.ci {
+        return Err(err!("--init cannot be combined with --ci"));
     }
     if flags.config.is_some() {
         return Err(err!("--init cannot be combined with --config"));
@@ -237,6 +260,8 @@ Default behavior
   Running `nao` with no task names opens the TUI using `nao.kdl` in the current directory.
   Running `nao build test` executes the requested goal tasks and any dependencies they need.
   Running `nao --list` prints the task names defined in the selected recipe file.
+  Running `nao --ci build test` disables interactive progress, prints task lifecycle updates,
+  then emits executed task logs and a final run summary.
 
 Task selection
   Task names are passed as positional arguments:
@@ -385,6 +410,7 @@ mod tests {
     use super::run_with_pal_and_version_loader;
     use super::should_run_tui;
     use super::starter_recipe;
+    use super::validate_ci_request;
     use super::validate_init_request;
     use super::validate_tui_request;
     use super::validate_version_request;
@@ -435,6 +461,14 @@ mod tests {
     }
 
     #[test]
+    fn parses_ci_flag() {
+        let flags = Nao::from_vec(vec![OsString::from("--ci"), OsString::from("build")]).unwrap();
+
+        assert!(flags.ci);
+        assert_eq!(flags.task_name, vec!["build".to_owned()]);
+    }
+
+    #[test]
     fn parses_init_flag() {
         let flags = Nao::from_vec(vec![OsString::from("--init")]).unwrap();
 
@@ -481,6 +515,19 @@ mod tests {
             error
                 .to_test_string()
                 .contains("--tui cannot be combined with task names")
+        );
+    }
+
+    #[test]
+    fn rejects_tui_with_ci() {
+        let flags = Nao::from_vec(vec![OsString::from("--tui"), OsString::from("--ci")]).unwrap();
+
+        let error = validate_ci_request(&flags).unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("--ci cannot be combined with --tui")
         );
     }
 
@@ -611,6 +658,13 @@ mod tests {
     }
 
     #[test]
+    fn does_not_default_to_tui_when_ci_is_requested() {
+        let flags = Nao::from_vec(vec![OsString::from("--ci")]).unwrap();
+
+        assert!(!should_run_tui(&flags));
+    }
+
+    #[test]
     fn renders_version_without_dev_suffix_for_clean_worktree() {
         let rendered = render_version(&VersionMetadata {
             last_commit_date: SharedString::from("2026-03-21"),
@@ -655,6 +709,9 @@ OPTIONS:
     --tui
       Open the terminal UI.
 
+    --ci
+      Run with CI-friendly logging and a final task-log summary.
+
     --version
       Print build-time version metadata.
 
@@ -669,12 +726,11 @@ OPTIONS:
         assert!(help.contains("OPTIONS:"));
         assert!(help.contains("Recipe file overview"));
         assert!(help.contains("Task outcomes"));
+        assert!(help.contains("nao --ci build test"));
         assert!(help.contains("run shell=\"<command>\""));
         assert!(help.contains("artifact \"<name>\" path=\"<path>\""));
         assert!(help.contains("nao --init"));
-        assert!(help.contains(
-            "Only lines that begin exactly with `Task outcome: ` are captured."
-        ));
+        assert!(help.contains("Only lines that begin exactly with `Task outcome: ` are captured."));
     }
 
     #[test]

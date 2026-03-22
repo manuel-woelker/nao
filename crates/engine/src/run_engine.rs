@@ -2,8 +2,10 @@ use crate::live_task_artifact_sink::LiveTaskArtifactSink;
 use crate::planned_run::PlannedRun;
 use crate::run_artifact_writer::RunArtifactWriter;
 use crate::run_artifact_writer::TaskArtifactRecord;
+use crate::run_artifact_writer::task_log_file_name;
 use crate::run_execution_result::RunExecutionResult;
 use crate::run_execution_result::RunStatus;
+use crate::run_execution_result::RunTaskResult;
 use crate::run_execution_result::TaskFailure;
 use crate::run_observer::RunObserver;
 use crate::task_event_record::TaskEventRecord;
@@ -203,6 +205,24 @@ impl RunEngine {
                 .as_nanos()
                 .saturating_sub(run_started_at.as_nanos()),
             run_directory: writer.run_directory(),
+            task_results: task_records
+                .iter()
+                .map(|task_record| RunTaskResult {
+                    name: task_record.name.clone(),
+                    status: task_record.status.clone(),
+                    result: task_record.result.clone(),
+                    exit_code: task_record.exit_code,
+                    duration_nanos: task_record.started_at.zip(task_record.finished_at).map(
+                        |(started_at, finished_at)| {
+                            finished_at.as_nanos().saturating_sub(started_at.as_nanos())
+                        },
+                    ),
+                    outcome_message: task_record.outcome_message.clone(),
+                    log_path: writer
+                        .run_directory()
+                        .join(task_log_file_name(task_record.name.as_str())),
+                })
+                .collect(),
             goal_outcome_message: goal_outcome_message(&plan.requested_tasks, &task_records),
             status: run_status,
         })

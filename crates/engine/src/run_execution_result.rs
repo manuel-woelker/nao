@@ -40,8 +40,29 @@ pub struct RunExecutionResult {
     pub duration_nanos: u128,
     /// Directory that stores the run artifacts.
     pub run_directory: FilePath,
+    /// Final per-task execution results for the run.
+    pub task_results: Vec<RunTaskResult>,
     /// Outcome reported by the single requested goal task when available.
     pub goal_outcome_message: Option<SharedString>,
     /// Overall run status.
     pub status: RunStatus,
+}
+
+/// Describes the final recorded state of one task in a completed run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunTaskResult {
+    /// Task name.
+    pub name: SharedString,
+    /// Final task status.
+    pub status: SharedString,
+    /// Final task result string.
+    pub result: SharedString,
+    /// Process exit code when available.
+    pub exit_code: Option<i32>,
+    /// Task duration when both start and finish timestamps exist.
+    pub duration_nanos: Option<u128>,
+    /// Final reported task outcome when available.
+    pub outcome_message: Option<SharedString>,
+    /// Path to the persisted task log file.
+    pub log_path: FilePath,
 }

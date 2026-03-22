@@ -5,6 +5,7 @@ use nao_base::shared_string::SharedString;
 use nao_engine::RunEngine;
 use nao_engine::RunObserver;
 use nao_engine::RunStatus;
+use nao_engine::RunTaskResult;
 use nao_engine::TaskFailure;
 use nao_pal::pal::PalHandle;
 use nao_recipe::{LiveDisplay, Task, TaskName};
@@ -48,6 +49,7 @@ impl Runner {
         &self,
         recipe_path: &FilePath,
         list: bool,
+        ci: bool,
         task_names: &[String],
     ) -> NaoResult<RunnerOutput> {
         if list {
@@ -63,6 +65,25 @@ impl Runner {
         let run_started_at = self.pal.now();
         let run_started_system_time = self.pal.system_time();
         let plan = self.engine.plan_run(recipe_path, task_names)?;
+        if ci {
+            let mut ci_display = CiDisplay;
+            let result = self.engine.execute_planned_run_with_observer_started_at(
+                recipe_path,
+                &plan,
+                &mut ci_display,
+                run_started_at,
+                run_started_system_time,
+            )?;
+
+            return Ok(RunnerOutput {
+                output: render_ci_output(&*self.pal, &result)?,
+                exit_code: match result.status {
+                    RunStatus::Completed => ExitCode::SUCCESS,
+                    RunStatus::Failed(_) => ExitCode::FAILURE,
+                },
+            });
+        }
+
         let running_line_body = render_running_line_body(&plan.requested_tasks, plan.tasks.len());
         let mut line_per_task_display = None;
         let mut single_line_display = None;
@@ -167,6 +188,41 @@ impl Runner {
     }
 }
 
+struct CiDisplay;
+
+impl RunObserver for CiDisplay {
+    fn on_task_started(&mut self, task_name: &str) {
+        println!("Starting {task_name}");
+        std::io::stdout().flush().unwrap();
+    }
+
+    fn on_task_completed(
+        &mut self,
+        task_name: &str,
+        elapsed_nanos: u128,
+        outcome_message: Option<&str>,
+    ) {
+        let outcome_suffix = outcome_message
+            .map(|message| format!(": {message}"))
+            .unwrap_or_default();
+        println!(
+            "Completed {task_name} in {}{outcome_suffix}",
+            pretty_duration(elapsed_nanos)
+        );
+        std::io::stdout().flush().unwrap();
+    }
+
+    fn on_task_failed(
+        &mut self,
+        task_name: &str,
+        elapsed_nanos: u128,
+        _outcome_message: Option<&str>,
+    ) {
+        println!("Failed {task_name} in {}", pretty_duration(elapsed_nanos));
+        std::io::stdout().flush().unwrap();
+    }
+}
+
 fn render_success_summary(
     goal_tasks: &[SharedString],
     total_task_count: usize,
@@ -237,6 +293,115 @@ fn render_failure_summary(goal_tasks: &[SharedString], task_failure: &TaskFailur
     );
 
     output
+}
+
+fn render_ci_output(
+    pal: &dyn nao_pal::pal::Pal,
+    result: &nao_engine::RunExecutionResult,
+) -> NaoResult<String> {
+    let mut output = String::new();
+    let mut executed_tasks = result
+        .task_results
+        .iter()
+        .filter(|task| matches!(task.status.as_str(), "completed" | "failed"))
+        .collect::<Vec<_>>();
+    executed_tasks.sort_by_key(|task| (task.status.as_str() == "failed", task.name.as_str()));
+
+    if !executed_tasks.is_empty() {
+        output.push_str("Task logs\n");
+        for (index, task) in executed_tasks.iter().enumerate() {
+            if index > 0 {
+                output.push('\n');
+            }
+            let _ = writeln!(
+                &mut output,
+                "== {} ({}) ==",
+                task.name.as_str(),
+                task.status.as_str()
+            );
+            output.push_str(&pal.read_file_to_string(&task.log_path)?);
+        }
+        output.push('\n');
+    }
+
+    output.push_str(&render_ci_summary(result));
+    Ok(output)
+}
+
+fn render_ci_summary(result: &nao_engine::RunExecutionResult) -> String {
+    let mut output = String::new();
+    let task_name_width = result
+        .task_results
+        .iter()
+        .map(|task| task.name.as_str().len())
+        .max()
+        .unwrap_or(0);
+    let status_width = result
+        .task_results
+        .iter()
+        .map(|task| task.status.as_str().len())
+        .max()
+        .unwrap_or(0);
+    let duration_width = result
+        .task_results
+        .iter()
+        .filter_map(|task| task.duration_nanos)
+        .map(pretty_duration)
+        .map(|duration| duration.len())
+        .max()
+        .unwrap_or(1);
+
+    let _ = writeln!(&mut output, "Run summary");
+    for task in &result.task_results {
+        let duration = task
+            .duration_nanos
+            .map(pretty_duration)
+            .unwrap_or_else(|| "-".to_owned());
+        let detail = render_ci_task_summary_detail(task);
+        let _ = writeln!(
+            &mut output,
+            "  {:<status_width$}  {:<task_name_width$}  {:>duration_width$}{}",
+            task.status.as_str(),
+            task.name.as_str(),
+            duration,
+            detail
+        );
+    }
+
+    let _ = writeln!(
+        &mut output,
+        "\nOverall result: {} in {}",
+        match result.status {
+            RunStatus::Completed => "completed",
+            RunStatus::Failed(_) => "failed",
+        },
+        pretty_duration(result.duration_nanos)
+    );
+    if let RunStatus::Failed(task_failure) = &result.status {
+        let _ = writeln!(
+            &mut output,
+            "Failure: {} failed with exit code {}",
+            task_failure.task_name.as_str(),
+            task_failure.exit_code
+        );
+    }
+
+    output
+}
+
+fn render_ci_task_summary_detail(task: &RunTaskResult) -> String {
+    let mut parts = Vec::new();
+    if let Some(outcome_message) = &task.outcome_message {
+        parts.push(outcome_message.as_str().to_owned());
+    }
+    if let Some(exit_code) = task.exit_code.filter(|exit_code| *exit_code != 0) {
+        parts.push(format!("exit {exit_code}"));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", parts.join(" | "))
+    }
 }
 
 fn render_running_line_body(goal_tasks: &[TaskName], total_task_count: usize) -> String {
@@ -775,7 +940,7 @@ mod tests {
     fn renders_task_list() {
         let (runner, _) = test_runner();
         let output = runner
-            .execute(&FilePath::from("nao.kdl"), true, &[])
+            .execute(&FilePath::from("nao.kdl"), true, false, &[])
             .unwrap();
 
         expect![[r#"
@@ -794,7 +959,7 @@ mod tests {
         pal.set_interactive_terminal(true);
 
         let output = runner
-            .execute(&FilePath::from("nao.kdl"), true, &[])
+            .execute(&FilePath::from("nao.kdl"), true, false, &[])
             .unwrap();
 
         assert!(output.output.contains("\u{1b}[1m"));
@@ -809,7 +974,12 @@ mod tests {
         pal.set_current_timestamp(Timestamp::new(4));
 
         let output = runner
-            .execute(&FilePath::from("nao.kdl"), false, &["test".to_owned()])
+            .execute(
+                &FilePath::from("nao.kdl"),
+                false,
+                false,
+                &["test".to_owned()],
+            )
             .unwrap();
 
         expect![[r#"
@@ -857,7 +1027,12 @@ mod tests {
         );
 
         let output = runner
-            .execute(&FilePath::from("nao.kdl"), false, &["test".to_owned()])
+            .execute(
+                &FilePath::from("nao.kdl"),
+                false,
+                false,
+                &["test".to_owned()],
+            )
             .unwrap();
 
         expect![[r#"
@@ -868,6 +1043,115 @@ mod tests {
             ❌ test failed because test failed with exit code 1 in 4ns after 1 task completed successfully
         "#]]
         .assert_eq(&nao_base::unansi(&output.output));
+        assert_eq!(output.exit_code, ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn renders_ci_output_with_task_logs_and_summary() {
+        let (runner, pal) = test_runner();
+        set_script_process(&pal, "./scripts/build.sh", b"Task outcome: build ready\n");
+        set_script_process(
+            &pal,
+            "./scripts/test.sh",
+            b"test ok\nTask outcome: 3 tests passed\n",
+        );
+        pal.set_current_timestamp(Timestamp::new(9));
+
+        let output = runner
+            .execute(
+                &FilePath::from("nao.kdl"),
+                false,
+                true,
+                &["test".to_owned()],
+            )
+            .unwrap();
+
+        expect![[r#"
+            Task logs
+            == build (completed) ==
+            [1970-01-01T00:00:00Z] stdout: Task outcome: build ready
+
+            == test (completed) ==
+            [1970-01-01T00:00:00Z] stdout: test ok
+            [1970-01-01T00:00:00Z] stdout: Task outcome: 3 tests passed
+
+            Run summary
+              completed  build  4ns  build ready
+              completed  test   4ns  3 tests passed
+
+            Overall result: completed in 0ns
+        "#]]
+        .assert_eq(&nao_base::unansi(&output.output));
+        assert_eq!(output.exit_code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn renders_ci_logs_in_alphabetical_order_with_failures_last() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "zeta" {
+                run script="./scripts/zeta.sh"
+              }
+
+              task "alpha" {
+                run script="./scripts/alpha.sh"
+              }
+            }
+            "#,
+        );
+        set_script_process(&pal, "./scripts/zeta.sh", b"zeta ok\n");
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "./scripts/alpha.sh".into(),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::Output(ProcessOutputEvent {
+                    timestamp: Timestamp::new(1),
+                    stream: ProcessOutputStream::Stdout,
+                    bytes: b"alpha boom\n".to_vec(),
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(2),
+                    stream: ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(3),
+                    stream: ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(4),
+                    exit_code: Some(7),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(4),
+                exit_code: Some(7),
+            },
+        );
+        pal.set_current_timestamp(Timestamp::new(9));
+        let runner = Runner::new(PalHandle::new(pal));
+
+        let output = runner
+            .execute(
+                &FilePath::from("nao.kdl"),
+                false,
+                true,
+                &["zeta".to_owned(), "alpha".to_owned()],
+            )
+            .unwrap();
+        let rendered = nao_base::unansi(&output.output);
+
+        let zeta_index = rendered.find("== zeta (completed) ==").unwrap();
+        let alpha_index = rendered.find("== alpha (failed) ==").unwrap();
+        assert!(zeta_index < alpha_index);
+        assert!(rendered.contains("failed     alpha  4ns  exit 7"));
         assert_eq!(output.exit_code, ExitCode::FAILURE);
     }
 

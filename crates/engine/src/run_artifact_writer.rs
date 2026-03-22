@@ -288,8 +288,7 @@ impl RunArtifactWriter {
     }
 
     fn task_log_path(&self, task_name: &str) -> FilePath {
-        self.run_directory
-            .join(format!("{}.log", sanitize_file_component(task_name)))
+        self.run_directory.join(task_log_file_name(task_name))
     }
 
     fn append_event_json(&self, value: &serde_json::Value) -> NaoResult<()> {
@@ -315,6 +314,11 @@ impl RunArtifactWriter {
         }
         Ok(())
     }
+}
+
+/// Returns the persisted task log file name for a task.
+pub fn task_log_file_name(task_name: &str) -> String {
+    format!("{}.log", sanitize_file_component(task_name))
 }
 
 fn task_plan_json(task: &Task) -> serde_json::Value {

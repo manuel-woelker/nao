@@ -12,5 +12,6 @@ pub use planned_run::PlannedRun;
 pub use run_engine::RunEngine;
 pub use run_execution_result::RunExecutionResult;
 pub use run_execution_result::RunStatus;
+pub use run_execution_result::RunTaskResult;
 pub use run_execution_result::TaskFailure;
 pub use run_observer::RunObserver;
