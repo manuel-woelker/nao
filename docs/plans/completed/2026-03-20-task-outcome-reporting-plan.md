@@ -18,7 +18,6 @@ The repository now has:
 The completed work added:
 
 - direct `Task outcome: ...` capture from framed task output
-- a Unix shell-task helper through `NAO_TASK_OUTCOME`
 - persisted `outcome_message` fields in run events and summaries
 - CLI success-summary rendering for single-goal outcomes
 - TUI task and detail rendering for persisted outcomes
@@ -27,20 +26,11 @@ The completed work added:
 
 The implementation should treat any task output line that starts with `Task outcome: ` as an explicit task outcome summary.
 
-For shell tasks on Unix, `nao` should also provide a convenience path through an environment variable plus injected wrapper code:
+This design supports one clear producer path:
 
-1. `nao` injects a reserved environment variable such as `NAO_TASK_OUTCOME`.
-2. Task code may assign or update `NAO_TASK_OUTCOME` anywhere during execution.
-3. `nao` prepends shell wrapper code that installs an `EXIT` trap.
-4. The `EXIT` trap checks the final exit status and, on success only, prints a line such as `Task outcome: 100 files formatted`.
-5. The engine extracts the last matching `Task outcome: ` line from framed task output and stores it as structured task outcome metadata.
+- tasks print `Task outcome: ...` themselves
 
-This design supports two valid producer paths:
-
-- tasks may simply print `Task outcome: ...` themselves
-- shell tasks may rely on the injected `NAO_TASK_OUTCOME` convenience helper
-
-The engine should not distinguish between those two sources.
+The engine should not need any special shell-only helper behavior.
 
 # Why use a human-readable log-line convention?
 
@@ -51,33 +41,17 @@ This approach is attractive because:
 - the task decides what the outcome means
 - the engine stays generic across formatters, test runners, and custom scripts
 - existing tools and scripts can opt in just by printing one readable line
-- shell tasks still get a convenience helper through `NAO_TASK_OUTCOME`
 - the raw logs remain useful even outside `nao`'s structured views
 
 # How should the shell wrapper behave?
 
-The Unix shell wrapper should keep the existing strict Bash and failure-reporting behavior, and add a success-path `EXIT` trap for outcome emission.
+The Unix shell wrapper should keep the existing strict Bash and failure-reporting behavior.
 
 The wrapper should:
 
 - continue using `bash -o errexit -o nounset -o errtrace -o pipefail -c ...`
 - preserve the existing `ERR` trap that prints the failing line and command
-- add an `EXIT` trap that:
-  - captures the final exit code
-  - emits an outcome marker only when the exit code is `0`
-  - emits an outcome marker only when `NAO_TASK_OUTCOME` is non-empty
-  - preserves the original exit code
-
-The task-facing shell usage should look like:
-
-```sh
-NAO_TASK_OUTCOME="discovering files"
-count=$(find . -name '*.rs' | wc -l)
-NAO_TASK_OUTCOME="$count files formatted"
-cargo fmt
-```
-
-The wrapper should read the environment variable at exit time so the last value wins.
+- avoid injecting wrapper-specific outcome plumbing
 
 # How should marker formatting work?
 
@@ -88,12 +62,10 @@ Task outcome: <message>
 ```
 
 The engine should treat this prefix as the task outcome convention.
-The message should be normalized to a single line before emission.
+The implementation should treat the final framed line payload as the marker message.
 
-The initial implementation should likely:
+The initial implementation should:
 
-- strip trailing newlines from the environment variable value before printing
-- reject or normalize embedded newlines so the protocol stays one marker per line
 - treat the last valid marker line in task output as the final outcome
 
 Because the marker is human-readable, matching lines should remain in task logs as ordinary output.
@@ -151,10 +123,9 @@ The documented contract should be:
 
 - any task output line beginning with `Task outcome: ` is eligible to become the task outcome summary
 - if multiple matching lines are printed, the last one wins
-- shell tasks on Unix may alternatively set or update `NAO_TASK_OUTCOME`, which `nao` will emit as `Task outcome: ...` on successful exit
-- if no matching line is printed and the helper variable is unset or empty, no outcome is recorded
+- if no matching line is printed, no outcome is recorded
 
-This makes direct log output the primary mechanism and the environment-variable wrapper a convenience path for shell tasks.
+This keeps the task author contract explicit and portable.
 
 # What implementation order is recommended?
 
@@ -162,12 +133,10 @@ The recommended order is:
 
 1. Extend output framing or post-processing in the engine to detect `Task outcome: ` lines and capture the last matching message.
 2. Store the extracted outcome on task-finished events and persisted task summary records.
-3. Add a focused helper that builds the Unix shell wrapper with both `ERR` and `EXIT` traps.
-4. Inject `NAO_TASK_OUTCOME` into shell task environments if it is not already present.
-5. Emit `Task outcome: ...` lines on successful shell task exit when the outcome variable is non-empty.
-6. Update the CLI to display the task outcome where it improves readability.
-7. Update the TUI artifact loading and task detail rendering to surface the outcome.
-8. Document the direct-output contract and shell-task helper examples.
+3. Keep the Unix shell wrapper focused on strict execution and failure reporting.
+4. Update the CLI to display the task outcome where it improves readability.
+5. Update the TUI artifact loading and task detail rendering to surface the outcome.
+6. Document the direct-output contract with explicit examples.
 
 # What concrete work items were completed?
 
@@ -178,10 +147,8 @@ The recommended order is:
 - [x] Update TUI summary/event loading to deserialize and expose the new field.
 - [x] Update CLI rendering to display the outcome on successful task completion when available.
 - [x] Update TUI rendering to display the outcome in task detail views.
-- [x] Add a Unix shell-wrapper helper that composes strict Bash, the existing `ERR` trap, and a success-path `EXIT` trap for outcome emission.
-- [x] Decide whether `NAO_TASK_OUTCOME` should be injected as empty by default or only consumed when explicitly set by the task.
-- [x] Normalize or reject multiline outcome values before wrapper-driven marker emission.
-- [x] Add engine tests for shell wrapper generation with both failure and success traps.
+- [x] Keep the Unix shell wrapper focused on strict Bash execution and failure reporting.
+- [x] Add engine tests for shell wrapper generation with the failure-reporting trap.
 - [x] Add engine tests for extracting the last emitted outcome line and ignoring earlier values.
 - [x] Add engine tests proving directly printed outcome lines are captured without shell-wrapper help.
 - [x] Add engine tests proving human-readable outcome lines remain in persisted task logs.
@@ -211,7 +178,6 @@ The tests should prefer `PalMock` and existing artifact assertions so the behavi
 This plan assumes:
 
 - direct `Task outcome: ...` log lines are the primary outcome-reporting contract
-- the shell env-var helper may be scoped to Unix `run shell` tasks in the first implementation
 - a one-line textual message is sufficient for the first slice
 - leaving human-readable outcome lines in user-visible logs is preferable to hiding them
 - later support for structured outcome payloads may be desirable but is not required now
@@ -221,12 +187,11 @@ This plan assumes:
 The implemented slice made these decisions:
 
 - failed tasks preserve the last emitted outcome as debug metadata, but the CLI only promotes outcomes in successful single-goal summaries
-- Unix `run shell` tasks receive the helper mechanism in this first slice, while script tasks and Windows shell tasks use direct output only
+- Unix `run shell` tasks use the same explicit output contract as every other task type
 - the outcome marker remains plain text for now
 - extraction happens in engine post-processing over framed task lines
 - the CLI shows the outcome in the final success summary for a single requested goal task rather than trying to aggregate multiple outcomes
 
 The remaining follow-up areas are:
 
-- expanding the helper mechanism beyond Unix shell tasks if that becomes important
 - reconsidering whether richer task-list rendering should surface outcomes more prominently in the CLI or TUI

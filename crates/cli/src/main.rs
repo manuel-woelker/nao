@@ -216,11 +216,11 @@ fn starter_recipe() -> &'static str {
     """
   }
 
-  task "test" description="Sample test task using the NAO_TASK_OUTCOME helper" {
+  task "test" description="Sample test task with an explicit outcome line" {
     depends-on "build"
     run shell="""
       printf 'Running sample tests...\n'
-      NAO_TASK_OUTCOME="3 sample tests passed"
+      printf 'Task outcome: 3 sample tests passed\n'
     """
   }
 }
@@ -321,16 +321,12 @@ Recipe config
       If omitted, `nao` uses the platform default parallelism.
 
 Task outcomes
-  Tasks may report a short human-readable outcome summary in either of these ways.
+  Tasks may report a short human-readable outcome summary by printing a line
+  beginning with `Task outcome: `
+  Example:
+    printf 'Task outcome: 30 tests passed\n'
 
-  1. Print a line beginning with `Task outcome: `
-     Example:
-       printf 'Task outcome: 30 tests passed\n'
-
-  2. For Unix `run shell` tasks, set `NAO_TASK_OUTCOME`
-     Example:
-       NAO_TASK_OUTCOME="30 tests passed"
-
+  Only lines that begin exactly with `Task outcome: ` are captured.
   If multiple outcome lines are produced, the last one wins.
   The outcome line remains in logs and is also persisted for the CLI and TUI.
 
@@ -676,6 +672,9 @@ OPTIONS:
         assert!(help.contains("run shell=\"<command>\""));
         assert!(help.contains("artifact \"<name>\" path=\"<path>\""));
         assert!(help.contains("nao --init"));
+        assert!(help.contains(
+            "Only lines that begin exactly with `Task outcome: ` are captured."
+        ));
     }
 
     #[test]
@@ -711,11 +710,11 @@ OPTIONS:
                 """
               }
 
-              task "test" description="Sample test task using the NAO_TASK_OUTCOME helper" {
+              task "test" description="Sample test task with an explicit outcome line" {
                 depends-on "build"
                 run shell="""
                   printf 'Running sample tests...\n'
-                  NAO_TASK_OUTCOME="3 sample tests passed"
+                  printf 'Task outcome: 3 sample tests passed\n'
                 """
               }
             }

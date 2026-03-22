@@ -62,7 +62,7 @@ recipe "default" {
       )"
 
       rm -f "$TEST_OUTPUT_FILE"
-      NAO_TASK_OUTCOME="$EXECUTED_TESTS tests passed"
+      printf 'Task outcome: %s tests passed\n' "$EXECUTED_TESTS"
     """
   }
 
@@ -139,35 +139,35 @@ recipe "default" {
   task "slow1" description="Sleep for 1 second" {
     run shell="""
       sleep 1
-      NAO_TASK_OUTCOME="slept for 1 second"
+      printf 'Task outcome: slept for 1 second\n'
     """
   }
 
   task "slow2" description="Sleep for 2 seconds" {
     run shell="""
       sleep 2
-      NAO_TASK_OUTCOME="slept for 2 seconds"
+      printf 'Task outcome: slept for 2 seconds\n'
     """
   }
 
   task "slow3" description="Sleep for 3 seconds" {
     run shell="""
       sleep 3
-      NAO_TASK_OUTCOME="slept for 3 seconds"
+      printf 'Task outcome: slept for 3 seconds\n'
     """
   }
 
   task "slow4" description="Sleep for 4 seconds" {
     run shell="""
       sleep 4
-      NAO_TASK_OUTCOME="slept for 4 seconds"
+      printf 'Task outcome: slept for 4 seconds\n'
     """
   }
 
   task "slow5" description="Sleep for 5 seconds" {
     run shell="""
       sleep 5
-      NAO_TASK_OUTCOME="slept for 5 seconds"
+      printf 'Task outcome: slept for 5 seconds\n'
     """
   }
 }

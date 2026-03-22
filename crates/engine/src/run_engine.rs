@@ -15,7 +15,6 @@ use nao_base::shared_string::SharedString;
 use nao_base::timestamp::Timestamp;
 use nao_pal::pal::PalHandle;
 use nao_pal::process_command::ProcessCommand;
-use nao_pal::process_environment_variable::ProcessEnvironmentVariable;
 use nao_pal::process_output_stream::ProcessOutputStream;
 use nao_recipe::{RunSpec, Task, TaskName, load_recipe_with_pal};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -24,7 +23,6 @@ use std::thread;
 use std::time::SystemTime;
 
 const TASK_OUTCOME_PREFIX: &str = "Task outcome: ";
-const TASK_OUTCOME_ENVIRONMENT_VARIABLE: &str = "NAO_TASK_OUTCOME";
 
 /// Loads recipes, plans runs, and executes tasks.
 pub struct RunEngine {
@@ -692,27 +690,19 @@ fn pretty_duration(duration_nanos: u128) -> String {
 }
 
 fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<ProcessCommand> {
-    let mut environment = task
+    let environment = task
         .environment
         .iter()
-        .map(|variable| ProcessEnvironmentVariable {
-            name: variable.name.clone(),
-            value: variable.value.clone(),
-        })
+        .map(
+            |variable| nao_pal::process_environment_variable::ProcessEnvironmentVariable {
+                name: variable.name.clone(),
+                value: variable.value.clone(),
+            },
+        )
         .collect::<Vec<_>>();
 
     match &task.run {
         RunSpec::Shell(command) => {
-            if !environment
-                .iter()
-                .any(|variable| variable.name.as_str() == TASK_OUTCOME_ENVIRONMENT_VARIABLE)
-            {
-                environment.push(ProcessEnvironmentVariable {
-                    name: SharedString::from(TASK_OUTCOME_ENVIRONMENT_VARIABLE),
-                    value: SharedString::empty(),
-                });
-            }
-
             #[cfg(windows)]
             let (executable, arguments) = (
                 SharedString::from("cmd"),
@@ -760,9 +750,7 @@ fn build_process_command(recipe_directory: &FilePath, task: &Task) -> NaoResult<
 #[cfg(not(windows))]
 fn build_bash_shell_script(command: &str) -> SharedString {
     format!(
-        "nao_emit_task_outcome() {{\n  local rc=\"$?\"\n  if [ \"$rc\" -eq 0 ] && [ -n \"${{{env_name}-}}\" ]; then\n    local outcome=\"${{{env_name}//$'\\r'/ }}\"\n    outcome=\"${{outcome//$'\\n'/ }}\"\n    printf \"{prefix}%s\\n\" \"$outcome\"\n  fi\n  exit \"$rc\"\n}}\ntrap 'rc=$?; printf \"nao: command failed (exit %d) at line %d: %s\\n\" \"$rc\" \"$LINENO\" \"$BASH_COMMAND\" >&2; exit \"$rc\"' ERR\ntrap nao_emit_task_outcome EXIT\n{command}",
-        env_name = TASK_OUTCOME_ENVIRONMENT_VARIABLE,
-        prefix = TASK_OUTCOME_PREFIX,
+        "trap 'rc=$?; printf \"nao: command failed (exit %d) at line %d: %s\\n\" \"$rc\" \"$LINENO\" \"$BASH_COMMAND\" >&2; exit \"$rc\"' ERR\n{command}",
         command = command,
     )
     .into()
@@ -803,7 +791,6 @@ fn goal_outcome_message(
 #[cfg(test)]
 mod tests {
     use super::RunEngine;
-    use super::TASK_OUTCOME_ENVIRONMENT_VARIABLE;
     #[cfg(not(windows))]
     use super::build_bash_shell_script;
     use super::build_process_command;
@@ -947,12 +934,7 @@ test"#
                     build_bash_shell_script("false\necho \"This should not be executed\""),
                 ],
                 working_directory: Some(FilePath::from(".")),
-                environment: vec![
-                    nao_pal::process_environment_variable::ProcessEnvironmentVariable {
-                        name: SharedString::from(TASK_OUTCOME_ENVIRONMENT_VARIABLE),
-                        value: SharedString::empty(),
-                    }
-                ],
+                environment: Vec::new(),
             }
         );
 
@@ -977,17 +959,7 @@ test"#
         let script = build_bash_shell_script("false\nprintf '%s\\n' \"$MISSING\"\ncat file | sort");
 
         expect![[r#"
-nao_emit_task_outcome() {
-  local rc="$?"
-  if [ "$rc" -eq 0 ] && [ -n "${NAO_TASK_OUTCOME-}" ]; then
-    local outcome="${NAO_TASK_OUTCOME//$'\r'/ }"
-    outcome="${outcome//$'\n'/ }"
-    printf "Task outcome: %s\n" "$outcome"
-  fi
-  exit "$rc"
-}
 trap 'rc=$?; printf "nao: command failed (exit %d) at line %d: %s\n" "$rc" "$LINENO" "$BASH_COMMAND" >&2; exit "$rc"' ERR
-trap nao_emit_task_outcome EXIT
 false
 printf '%s\n' "$MISSING"
 cat file | sort"#]]

@@ -135,18 +135,6 @@ For example:
 printf 'Task outcome: 30 tests succeeded\n'
 ```
 
-Unix `run shell` tasks may also use the `NAO_TASK_OUTCOME` helper.
-`nao` injects that environment variable for shell tasks and emits a matching `Task outcome: ...` line on successful exit when the final value is non-empty.
-
-For example:
-
-```sh
-NAO_TASK_OUTCOME="discovering files"
-count=$(find . -name '*.rs' | wc -l)
-NAO_TASK_OUTCOME="$count files formatted"
-cargo fmt
-```
-
 The outcome line remains in the task log and is also stored in structured run artifacts for the CLI and TUI.
 
 # What parts of the format are still open?
