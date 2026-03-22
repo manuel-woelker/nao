@@ -357,7 +357,6 @@ Workflow examples
   Open the TUI with a custom recipe:
     nao --tui --config configs/ci.kdl
 
-For more detail, inspect `docs/RECIPES.md`, but `--help` should be enough to get moving without that file.
 "#,
         version = render_version(&load_version_metadata().unwrap_or(VersionMetadata {
             last_commit_date: SharedString::from("unknown"),
@@ -396,8 +395,14 @@ mod tests {
     use expect_test::expect;
     use nao_base::file_path::FilePath;
     use nao_base::shared_string::SharedString;
+    use nao_base::timestamp::Timestamp;
     use nao_pal::pal::PalHandle;
     use nao_pal::pal_mock::PalMock;
+    use nao_pal::process_command::ProcessCommand;
+    use nao_pal::process_event::ProcessEvent;
+    use nao_pal::process_exited_event::ProcessExitedEvent;
+    use nao_pal::process_result::ProcessResult;
+    use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
     use std::ffi::OsString;
     use std::path::PathBuf;
     use std::process::ExitCode;
@@ -788,5 +793,55 @@ OPTIONS:
         .unwrap();
 
         assert_eq!(exit_code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn run_returns_exit_code_one_when_task_fails_with_non_one_status() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "test" {
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "./scripts/test.sh".into(),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(1),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(2),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(3),
+                    exit_code: Some(5),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(3),
+                exit_code: Some(5),
+            },
+        );
+        let flags = Nao::from_vec(vec![OsString::from("test")]).unwrap();
+
+        let exit_code = run_with_pal_and_version_loader(flags, PalHandle::new(pal), || {
+            unreachable!("task execution should not load version metadata")
+        })
+        .unwrap();
+
+        assert_eq!(exit_code, ExitCode::from(1));
     }
 }
