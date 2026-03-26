@@ -1,6 +1,8 @@
 use core::fmt::Write as _;
+use nao_base::err;
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
+use nao_base::result::{OptionExt, ResultExt};
 use nao_base::shared_string::SharedString;
 use nao_engine::RunEngine;
 use nao_engine::RunObserver;
@@ -12,8 +14,8 @@ use nao_recipe::{LiveDisplay, Task, TaskName};
 use std::io::Write as _;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
@@ -66,7 +68,7 @@ impl Runner {
         let run_started_system_time = self.pal.system_time();
         let plan = self.engine.plan_run(recipe_path, task_names)?;
         if ci {
-            let mut ci_display = CiDisplay;
+            let mut ci_display = CiDisplay { write_error: None };
             let result = self.engine.execute_planned_run_with_observer_started_at(
                 recipe_path,
                 &plan,
@@ -74,6 +76,7 @@ impl Runner {
                 run_started_at,
                 run_started_system_time,
             )?;
+            ci_display.finish()?;
 
             return Ok(RunnerOutput {
                 output: render_ci_output(&*self.pal, &result)?,
@@ -103,8 +106,8 @@ impl Runner {
                 }
             }
         } else {
-            print!("{}", render_running_line(&running_line_body));
-            std::io::stdout().flush().unwrap();
+            write_stdout(&render_running_line(&running_line_body))
+                .context("failed to render run header")?;
         }
 
         let result = if let Some(display) = line_per_task_display.as_mut() {
@@ -132,6 +135,12 @@ impl Runner {
                 run_started_system_time,
             )?
         };
+        if let Some(display) = single_line_display.as_mut() {
+            display.finish()?;
+        }
+        if let Some(display) = line_per_task_display.as_mut() {
+            display.finish()?;
+        }
         drop(single_line_display);
         drop(line_per_task_display);
         let output = match &result.status {
@@ -188,12 +197,35 @@ impl Runner {
     }
 }
 
-struct CiDisplay;
+struct CiDisplay {
+    write_error: Option<nao_base::error::NaoError>,
+}
+
+impl CiDisplay {
+    fn finish(&mut self) -> NaoResult<()> {
+        match self.write_error.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn write_line(&mut self, line: &str, context: &str) {
+        if self.write_error.is_some() {
+            return;
+        }
+
+        if let Err(error) = write_stdout(&(line.to_owned() + "\n")).with_context(|| context) {
+            self.write_error = Some(error);
+        }
+    }
+}
 
 impl RunObserver for CiDisplay {
     fn on_task_started(&mut self, task_name: &str) {
-        println!("Starting {task_name}");
-        std::io::stdout().flush().unwrap();
+        self.write_line(
+            &format!("Starting {task_name}"),
+            "failed to write CI task start",
+        );
     }
 
     fn on_task_completed(
@@ -205,11 +237,13 @@ impl RunObserver for CiDisplay {
         let outcome_suffix = outcome_message
             .map(|message| format!(": {message}"))
             .unwrap_or_default();
-        println!(
-            "Completed {task_name} in {}{outcome_suffix}",
-            pretty_duration(elapsed_nanos)
+        self.write_line(
+            &format!(
+                "Completed {task_name} in {}{outcome_suffix}",
+                pretty_duration(elapsed_nanos)
+            ),
+            "failed to write CI task completion",
         );
-        std::io::stdout().flush().unwrap();
     }
 
     fn on_task_failed(
@@ -218,8 +252,10 @@ impl RunObserver for CiDisplay {
         elapsed_nanos: u128,
         _outcome_message: Option<&str>,
     ) {
-        println!("Failed {task_name} in {}", pretty_duration(elapsed_nanos));
-        std::io::stdout().flush().unwrap();
+        self.write_line(
+            &format!("Failed {task_name} in {}", pretty_duration(elapsed_nanos)),
+            "failed to write CI task failure",
+        );
     }
 }
 
@@ -452,7 +488,8 @@ fn render_completed_task_count(successful_task_count: usize) -> String {
 struct SingleLineDisplay {
     stop: Arc<AtomicBool>,
     snapshot: Arc<Mutex<LiveTaskSnapshot>>,
-    handle: Option<thread::JoinHandle<()>>,
+    update_error: Arc<Mutex<Option<nao_base::error::NaoError>>>,
+    handle: Option<thread::JoinHandle<NaoResult<()>>>,
 }
 
 impl SingleLineDisplay {
@@ -470,34 +507,51 @@ impl SingleLineDisplay {
                 })
                 .collect(),
         }));
+        let update_error = Arc::new(Mutex::new(None));
         let thread_stop = Arc::clone(&stop);
         let thread_snapshot = Arc::clone(&snapshot);
+        let thread_update_error = Arc::clone(&update_error);
         let handle = thread::spawn(move || {
             const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let mut frame_index = 0usize;
 
             while !thread_stop.load(Ordering::Relaxed) {
                 let rendered = {
-                    let snapshot = thread_snapshot.lock().unwrap();
+                    let snapshot = lock_mutex(
+                        &thread_snapshot,
+                        "failed to lock single-line display snapshot",
+                    )?;
                     render_single_line_display(snapshot.clone())
                 };
-                print!("\r{} {}\x1b[K", FRAMES[frame_index], rendered);
-                std::io::stdout().flush().unwrap();
+                write_stdout(&format!("\r{} {}\x1b[K", FRAMES[frame_index], rendered))
+                    .context("failed to write single-line display frame")?;
                 frame_index = (frame_index + 1) % FRAMES.len();
                 thread::sleep(Duration::from_millis(80));
             }
 
             let rendered = {
-                let snapshot = thread_snapshot.lock().unwrap();
+                let snapshot = lock_mutex(
+                    &thread_snapshot,
+                    "failed to lock single-line display snapshot",
+                )?;
                 render_single_line_display(snapshot.clone())
             };
-            print!("\r🚀 {}\x1b[K\n", rendered);
-            std::io::stdout().flush().unwrap();
+            let write_result = write_stdout(&format!("\r🚀 {}\x1b[K\n", rendered))
+                .context("failed to write final single-line display frame");
+            if let Err(error) = write_result {
+                store_async_error(
+                    &thread_update_error,
+                    error,
+                    "failed to persist single-line display error",
+                );
+            }
+            Ok(())
         });
 
         Self {
             stop,
             snapshot,
+            update_error,
             handle: Some(handle),
         }
     }
@@ -513,15 +567,61 @@ impl SingleLineDisplay {
         elapsed_nanos: Option<u128>,
         outcome_message: Option<&str>,
     ) {
-        let mut snapshot = self.snapshot.lock().unwrap();
-        let task = snapshot
+        let mut snapshot = match lock_mutex(
+            &self.snapshot,
+            "failed to lock single-line display snapshot",
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                store_async_error(
+                    &self.update_error,
+                    error,
+                    "failed to persist single-line display update error",
+                );
+                self.stop.store(true, Ordering::Relaxed);
+                return;
+            }
+        };
+        let task = match snapshot
             .tasks
             .iter_mut()
             .find(|task| task.name.as_str() == task_name)
-            .unwrap();
+            .with_context(|| format!("task `{task_name}` is missing from single-line display"))
+        {
+            Ok(task) => task,
+            Err(error) => {
+                store_async_error(
+                    &self.update_error,
+                    error,
+                    "failed to persist single-line display update error",
+                );
+                self.stop.store(true, Ordering::Relaxed);
+                return;
+            }
+        };
         task.status = status;
         task.elapsed_nanos = elapsed_nanos;
         task.outcome_message = outcome_message.map(SharedString::from);
+    }
+
+    fn finish(&mut self) -> NaoResult<()> {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let result = handle
+                .join()
+                .map_err(|_| err!("single-line display thread panicked"))
+                .context("failed to join single-line display thread")?;
+            result?;
+        }
+
+        if let Some(error) = take_async_error(
+            &self.update_error,
+            "failed to collect single-line display error",
+        )? {
+            return Err(error);
+        }
+
+        Ok(())
     }
 }
 
@@ -565,10 +665,7 @@ impl RunObserver for SingleLineDisplay {
 
 impl Drop for SingleLineDisplay {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            handle.join().unwrap();
-        }
+        let _ = self.finish();
     }
 }
 
@@ -598,7 +695,8 @@ struct LiveTaskSnapshot {
 struct LinePerTaskDisplay {
     stop: Arc<AtomicBool>,
     snapshot: Arc<Mutex<LiveTaskSnapshot>>,
-    handle: Option<thread::JoinHandle<()>>,
+    update_error: Arc<Mutex<Option<nao_base::error::NaoError>>>,
+    handle: Option<thread::JoinHandle<NaoResult<()>>>,
 }
 
 impl LinePerTaskDisplay {
@@ -616,27 +714,39 @@ impl LinePerTaskDisplay {
                 .collect(),
         }));
         let stop = Arc::new(AtomicBool::new(false));
+        let update_error = Arc::new(Mutex::new(None));
         let thread_stop = Arc::clone(&stop);
         let thread_snapshot = Arc::clone(&snapshot);
+        let thread_update_error = Arc::clone(&update_error);
         let handle = thread::spawn(move || {
             const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let line_count = thread_snapshot.lock().unwrap().tasks.len() + 1;
+            let line_count = lock_mutex(
+                &thread_snapshot,
+                "failed to lock line-per-task display snapshot",
+            )?
+            .tasks
+            .len()
+                + 1;
             let mut frame_index = 0usize;
             let mut first_render = true;
 
             loop {
                 let rendered = {
-                    let snapshot = thread_snapshot.lock().unwrap();
+                    let snapshot = lock_mutex(
+                        &thread_snapshot,
+                        "failed to lock line-per-task display snapshot",
+                    )?;
                     render_line_per_task_display(snapshot.clone(), FRAMES[frame_index])
                 };
 
                 if first_render {
-                    print!("{rendered}");
+                    write_stdout(&rendered)
+                        .context("failed to write initial line-per-task display frame")?;
                     first_render = false;
                 } else {
-                    print!("\x1b[{line_count}F\x1b[J{rendered}");
+                    write_stdout(&format!("\x1b[{line_count}F\x1b[J{rendered}"))
+                        .context("failed to write line-per-task display frame")?;
                 }
-                std::io::stdout().flush().unwrap();
 
                 if thread_stop.load(Ordering::Relaxed) {
                     break;
@@ -645,11 +755,23 @@ impl LinePerTaskDisplay {
                 frame_index = (frame_index + 1) % FRAMES.len();
                 thread::sleep(Duration::from_millis(80));
             }
+
+            if let Err(error) =
+                write_stdout("").context("failed to flush line-per-task display output")
+            {
+                store_async_error(
+                    &thread_update_error,
+                    error,
+                    "failed to persist line-per-task display error",
+                );
+            }
+            Ok(())
         });
 
         Self {
             stop,
             snapshot,
+            update_error,
             handle: Some(handle),
         }
     }
@@ -665,15 +787,61 @@ impl LinePerTaskDisplay {
         elapsed_nanos: Option<u128>,
         outcome_message: Option<&str>,
     ) {
-        let mut snapshot = self.snapshot.lock().unwrap();
-        let task = snapshot
+        let mut snapshot = match lock_mutex(
+            &self.snapshot,
+            "failed to lock line-per-task display snapshot",
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                store_async_error(
+                    &self.update_error,
+                    error,
+                    "failed to persist line-per-task display update error",
+                );
+                self.stop.store(true, Ordering::Relaxed);
+                return;
+            }
+        };
+        let task = match snapshot
             .tasks
             .iter_mut()
             .find(|task| task.name.as_str() == task_name)
-            .unwrap();
+            .with_context(|| format!("task `{task_name}` is missing from line-per-task display"))
+        {
+            Ok(task) => task,
+            Err(error) => {
+                store_async_error(
+                    &self.update_error,
+                    error,
+                    "failed to persist line-per-task display update error",
+                );
+                self.stop.store(true, Ordering::Relaxed);
+                return;
+            }
+        };
         task.status = status;
         task.elapsed_nanos = elapsed_nanos;
         task.outcome_message = outcome_message.map(SharedString::from);
+    }
+
+    fn finish(&mut self) -> NaoResult<()> {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let result = handle
+                .join()
+                .map_err(|_| err!("line-per-task display thread panicked"))
+                .context("failed to join line-per-task display thread")?;
+            result?;
+        }
+
+        if let Some(error) = take_async_error(
+            &self.update_error,
+            "failed to collect line-per-task display error",
+        )? {
+            return Err(error);
+        }
+
+        Ok(())
     }
 }
 
@@ -717,11 +885,45 @@ impl RunObserver for LinePerTaskDisplay {
 
 impl Drop for LinePerTaskDisplay {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            handle.join().unwrap();
-        }
+        let _ = self.finish();
     }
+}
+
+fn write_stdout(content: &str) -> NaoResult<()> {
+    let mut stdout = std::io::stdout();
+    stdout.write_all(content.as_bytes())?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn lock_mutex<'a, T>(mutex: &'a Mutex<T>, context: &str) -> NaoResult<MutexGuard<'a, T>> {
+    mutex.lock().map_err(|_| err!("{context}"))
+}
+
+fn store_async_error(
+    slot: &Mutex<Option<nao_base::error::NaoError>>,
+    error: nao_base::error::NaoError,
+    context: &str,
+) {
+    match slot.lock() {
+        Ok(mut slot) => {
+            if slot.is_none() {
+                *slot = Some(error);
+            }
+        }
+        Err(_) => eprintln!(
+            "{}",
+            err!("{context}: {}", error.to_test_string()).to_test_string()
+        ),
+    }
+}
+
+fn take_async_error(
+    slot: &Mutex<Option<nao_base::error::NaoError>>,
+    context: &str,
+) -> NaoResult<Option<nao_base::error::NaoError>> {
+    let mut slot = lock_mutex(slot, context)?;
+    Ok(slot.take())
 }
 
 fn render_line_per_task_display(snapshot: LiveTaskSnapshot, running_symbol: &str) -> String {

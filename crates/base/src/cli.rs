@@ -38,9 +38,12 @@ pub fn try_main_with_headline(headline: &str, run: impl FnOnce() -> NaoResult<()
 pub fn format_cli_error(headline: &str, error: &NaoError) -> String {
     let mut rendered = String::new();
     let _ = writeln!(&mut rendered, "\u{1b}[1;31m━━ {}\u{1b}[0m", headline);
-    error
-        .write_to(&mut rendered)
-        .expect("error rendering should not fail");
+    if error.write_to(&mut rendered).is_err() {
+        let _ = writeln!(
+            &mut rendered,
+            "\u{1b}[1;31m× error\u{1b}[0m failed to render detailed error output"
+        );
+    }
 
     let mut causes = Vec::new();
     let mut current = error.source();
@@ -90,13 +93,13 @@ mod tests {
         expect!([r#"
             ━━ verification failed
             × error failed to verify
-              at crates/base/src/cli.rs:87:21
+              at crates/base/src/cli.rs:90:21
             caused by: missing reference output
-                 at crates/base/src/cli.rs:88:26
+                 at crates/base/src/cli.rs:91:26
 
             ━━ cause chain
               • missing reference output
-                at crates/base/src/cli.rs:88:26
+                at crates/base/src/cli.rs:91:26
         "#])
         .assert_eq(&crate::unansi(&format_cli_error(
             "verification failed",
@@ -112,11 +115,11 @@ mod tests {
         expect!([r#"
             ━━ recipe failed
             × error failed to load recipe
-              at crates/base/src/cli.rs:109:21
+              at crates/base/src/cli.rs:112:21
             caused by:
                line one
                line two
-                 at crates/base/src/cli.rs:110:26
+                 at crates/base/src/cli.rs:113:26
         "#])
         .assert_eq(&crate::unansi(&format_cli_error("recipe failed", &error)));
     }

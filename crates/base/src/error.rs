@@ -115,7 +115,9 @@ impl NaoError {
 
     pub fn to_test_string(&self) -> String {
         let mut test_string = String::new();
-        self.write_to(&mut test_string).unwrap();
+        if self.write_to(&mut test_string).is_err() {
+            test_string.push_str("failed to render error");
+        }
         unansi(&test_string)
     }
 }

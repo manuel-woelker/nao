@@ -32,7 +32,7 @@ pub fn parse_recipe(source: &str) -> NaoResult<Recipe> {
 
 /// Loads and parses a recipe file using the real platform implementation.
 pub fn load_recipe(path: &FilePath) -> NaoResult<Recipe> {
-    let pal = PalReal::new_handle();
+    let pal = PalReal::new_handle()?;
     load_recipe_with_pal(&*pal, path)
 }
 
@@ -320,10 +320,16 @@ fn parse_run(source: &str, node: &KdlNode, task_name: &str) -> Result<RunSpec, R
     }
 
     let args = parse_container_args(source, node, task_name)?;
-    Ok(RunSpec::Container(ContainerRunSpec {
-        image: container.expect("container property checked above"),
-        args,
-    }))
+    let image = container.ok_or_else(|| {
+        recipe_error_for_node(
+            source,
+            node,
+            format!(
+                "task `{task_name}` run node must define exactly one of `shell`, `script`, or `container`"
+            ),
+        )
+    })?;
+    Ok(RunSpec::Container(ContainerRunSpec { image, args }))
 }
 
 fn parse_container_args(

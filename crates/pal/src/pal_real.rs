@@ -47,18 +47,20 @@ pub struct PalReal {
 }
 
 impl PalReal {
-    pub fn new_handle() -> PalHandle {
-        PalHandle::new(Self::new())
+    pub fn new_handle() -> NaoResult<PalHandle> {
+        Ok(PalHandle::new(Self::new()?))
     }
 
-    pub fn new() -> Self {
-        let current_dir = std::env::current_dir().expect("Unable to access current directory");
-        Self {
+    pub fn new() -> NaoResult<Self> {
+        let current_dir = std::env::current_dir().context("Unable to access current directory")?;
+        let runtime = Runtime::new().context("Unable to create Tokio runtime")?;
+
+        Ok(Self {
             base_path: current_dir,
             watchers: RwLock::new(Vec::new()),
             reference_instant: Instant::now(),
-            runtime: Runtime::new().expect("Unable to create Tokio runtime"),
-        }
+            runtime,
+        })
     }
 
     fn resolve_path(&self, path: &FilePath) -> NaoResult<PathBuf> {
@@ -186,12 +188,6 @@ impl PalReal {
             finished_at,
             exit_code,
         })
-    }
-}
-
-impl Default for PalReal {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -443,7 +439,7 @@ mod tests {
             environment: Vec::new(),
         };
 
-        let result = pal.run_process(&command, &mut sink).unwrap();
+        let result = pal.unwrap().run_process(&command, &mut sink).unwrap();
 
         assert_eq!(result.exit_code, Some(0));
         assert!(

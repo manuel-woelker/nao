@@ -13,6 +13,7 @@ use crate::task_run_state::TaskRunState;
 use nao_base::err;
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
+use nao_base::result::{OptionExt, ResultExt};
 use nao_base::shared_string::SharedString;
 use nao_base::timestamp::Timestamp;
 use nao_pal::pal::PalHandle;
@@ -266,7 +267,9 @@ impl RunEngine {
 
         while running_count > 0 || (!stop_launching && !ready_queue.is_empty()) {
             while !stop_launching && running_count < max_parallel_tasks && !ready_queue.is_empty() {
-                let task_index = ready_queue.pop_front().unwrap();
+                let task_index = ready_queue.pop_front().with_context(|| {
+                    "ready queue was empty while scheduling runnable tasks".to_owned()
+                })?;
                 let task = plan.tasks[task_index].clone();
                 states[task_index] = TaskRunState::Running;
                 observer.on_task_started(task.name.as_str());
@@ -280,12 +283,18 @@ impl RunEngine {
                 let pal = self.pal.clone();
                 let worker_recipe_directory = recipe_directory.clone();
                 let worker_writer = writer.clone();
+                let task_name = task.name.0.clone();
                 join_handles.push(thread::spawn(move || {
                     let (task_output, log_lines, execution_result) =
                         execute_task(pal, worker_recipe_directory, task, worker_writer);
                     worker_sender
                         .send((task_index, task_output, log_lines, execution_result))
-                        .unwrap();
+                        .with_context(|| {
+                            format!(
+                                "failed to send execution result for task `{}`",
+                                task_name.as_str()
+                            )
+                        })
                 }));
                 running_count += 1;
             }
@@ -294,7 +303,9 @@ impl RunEngine {
                 break;
             }
 
-            let (task_index, task_output, log_lines, execution_result) = receiver.recv().unwrap();
+            let (task_index, task_output, log_lines, execution_result) = receiver
+                .recv()
+                .context("failed to receive task execution result from worker thread")?;
             running_count = running_count.saturating_sub(1);
             output_by_task[task_index] = task_output;
             let task = &plan.tasks[task_index];
@@ -431,7 +442,10 @@ impl RunEngine {
 
         drop(sender);
         for handle in join_handles {
-            handle.join().unwrap();
+            handle
+                .join()
+                .map_err(|_| err!("task worker thread panicked"))
+                .context("failed to join task worker thread")??;
         }
 
         if stop_launching {

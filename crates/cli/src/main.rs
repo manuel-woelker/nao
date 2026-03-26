@@ -56,7 +56,7 @@ fn run() -> NaoResult<ExitCode> {
         }
         Err(error) => return Err(err!("{error}")),
     };
-    let pal = PalReal::new_handle();
+    let pal = PalReal::new_handle()?;
 
     run_with_pal_and_version_loader(flags, pal, load_version_metadata)
 }
