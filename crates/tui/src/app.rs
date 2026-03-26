@@ -56,6 +56,19 @@ struct ActiveRunHandle {
     receiver: Receiver<NaoResult<RunExecutionResult>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct OpenRunRefreshState {
+    force_detail_reload: bool,
+    force_selected_task_log_reload: bool,
+    force_launcher_failed_log_reload: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RunDetailRefreshOutcome {
+    selected_task_changed: bool,
+    failed_task_changed: bool,
+}
+
 /// Owns TUI state, rendering, and keyboard routing.
 pub struct App {
     pal: PalHandle,
@@ -84,6 +97,8 @@ pub struct App {
     active_run: Option<ActiveRunHandle>,
     launched_run_in_session: bool,
     spinner_frame: usize,
+    refresh_tick: u64,
+    open_run_refresh_state: OpenRunRefreshState,
 }
 
 impl App {
@@ -119,6 +134,8 @@ impl App {
             active_run: None,
             launched_run_in_session: false,
             spinner_frame: 0,
+            refresh_tick: 0,
+            open_run_refresh_state: OpenRunRefreshState::default(),
         };
         Ok(app)
     }
@@ -140,21 +157,32 @@ impl App {
     }
 
     fn refresh(&mut self) -> NaoResult<()> {
+        self.refresh_tick = self.refresh_tick.wrapping_add(1);
         self.spinner_frame = (self.spinner_frame + 1) % spinner_frames().len();
         self.refresh_active_run()?;
-        if self.should_refresh_open_run_detail() {
-            self.refresh_open_run_detail()?;
-        }
+        self.refresh_open_run_artifacts()?;
         Ok(())
     }
 
-    fn should_refresh_open_run_detail(&self) -> bool {
-        let Some(open_run_directory) = &self.open_run_directory else {
-            return false;
-        };
-        self.active_run
-            .as_ref()
-            .is_some_and(|active_run| active_run.run_directory == *open_run_directory)
+    fn refresh_open_run_artifacts(&mut self) -> NaoResult<()> {
+        if self.should_reload_open_run_detail() {
+            let outcome = self.reload_open_run_detail()?;
+            if outcome.selected_task_changed {
+                self.open_run_refresh_state.force_selected_task_log_reload = true;
+            }
+            if outcome.failed_task_changed {
+                self.open_run_refresh_state.force_launcher_failed_log_reload = true;
+            }
+        }
+        if self.should_reload_selected_task_log() {
+            self.reload_selected_task_log()?;
+            self.open_run_refresh_state.force_selected_task_log_reload = false;
+        }
+        if self.should_reload_launcher_failed_task_log() {
+            self.reload_launcher_failed_task_log()?;
+            self.open_run_refresh_state.force_launcher_failed_log_reload = false;
+        }
+        Ok(())
     }
 
     fn refresh_active_run(&mut self) -> NaoResult<()> {
@@ -182,6 +210,63 @@ impl App {
         Ok(())
     }
 
+    fn should_reload_open_run_detail(&self) -> bool {
+        if self.open_run_refresh_state.force_detail_reload {
+            return true;
+        }
+        if !self.is_open_run_active() {
+            return false;
+        }
+
+        self.refresh_tick.is_multiple_of(4)
+    }
+
+    fn should_reload_selected_task_log(&self) -> bool {
+        if self.open_run_refresh_state.force_selected_task_log_reload {
+            return true;
+        }
+        if !self.is_open_run_active() || !self.auto_follow_log || !self.show_detail_selected_task()
+        {
+            return false;
+        }
+
+        self.selected_task_is_active() && self.refresh_tick.is_multiple_of(2)
+    }
+
+    fn should_reload_launcher_failed_task_log(&self) -> bool {
+        if self.open_run_refresh_state.force_launcher_failed_log_reload {
+            return true;
+        }
+        if !self.is_open_run_active() {
+            return false;
+        }
+
+        self.show_launcher_failure_output() && self.refresh_tick.is_multiple_of(2)
+    }
+
+    fn is_open_run_active(&self) -> bool {
+        let Some(open_run_directory) = &self.open_run_directory else {
+            return false;
+        };
+        self.active_run
+            .as_ref()
+            .is_some_and(|active_run| active_run.run_directory == *open_run_directory)
+    }
+
+    fn show_detail_selected_task(&self) -> bool {
+        self.run_detail
+            .as_ref()
+            .and_then(|detail| detail.tasks.get(self.selected_run_task_index))
+            .is_some()
+    }
+
+    fn selected_task_is_active(&self) -> bool {
+        self.run_detail
+            .as_ref()
+            .and_then(|detail| detail.tasks.get(self.selected_run_task_index))
+            .is_some_and(|task| matches!(task.status.as_str(), "running" | "failed"))
+    }
+
     fn reload_history(&mut self) -> NaoResult<()> {
         self.runs = discover_runs(&*self.pal, &self.recipe_path)?;
         if self.selected_run_index >= self.runs.len() && !self.runs.is_empty() {
@@ -190,24 +275,62 @@ impl App {
         Ok(())
     }
 
-    fn refresh_open_run_detail(&mut self) -> NaoResult<()> {
+    fn reload_open_run_detail(&mut self) -> NaoResult<RunDetailRefreshOutcome> {
         let Some(run_directory) = &self.open_run_directory else {
-            return Ok(());
+            self.run_detail = None;
+            return Ok(RunDetailRefreshOutcome {
+                selected_task_changed: false,
+                failed_task_changed: false,
+            });
         };
+        let previous_selected_log_file = self
+            .run_detail
+            .as_ref()
+            .and_then(|detail| detail.tasks.get(self.selected_run_task_index))
+            .map(|task| task.log_file.clone());
+        let previous_failed_log_file = self
+            .run_detail
+            .as_ref()
+            .and_then(|detail| {
+                detail
+                    .tasks
+                    .iter()
+                    .find(|task| task.status.as_str() == "failed")
+            })
+            .map(|task| task.log_file.clone());
         self.run_detail = Some(load_run_detail(&*self.pal, run_directory)?);
-        self.reload_launcher_failed_task_log()?;
         if let Some(detail) = &self.run_detail {
             if detail.tasks.is_empty() {
                 self.selected_run_task_index = 0;
-                self.task_log_lines.clear();
             } else {
                 self.selected_run_task_index = self
                     .selected_run_task_index
                     .min(detail.tasks.len().saturating_sub(1));
-                self.reload_selected_task_log()?;
             }
         }
-        Ok(())
+        self.open_run_refresh_state.force_detail_reload = false;
+        let selected_task_changed = self
+            .run_detail
+            .as_ref()
+            .and_then(|detail| detail.tasks.get(self.selected_run_task_index))
+            .map(|task| task.log_file.clone())
+            != previous_selected_log_file;
+        let failed_task_changed = self
+            .run_detail
+            .as_ref()
+            .and_then(|detail| {
+                detail
+                    .tasks
+                    .iter()
+                    .find(|task| task.status.as_str() == "failed")
+            })
+            .map(|task| task.log_file.clone())
+            != previous_failed_log_file;
+
+        Ok(RunDetailRefreshOutcome {
+            selected_task_changed,
+            failed_task_changed,
+        })
     }
 
     fn reload_launcher_failed_task_log(&mut self) -> NaoResult<()> {
@@ -491,7 +614,11 @@ impl App {
     }
 
     fn move_selected_run_task_to(&mut self, index: usize) {
+        if self.selected_run_task_index == index {
+            return;
+        }
         self.selected_run_task_index = index;
+        self.open_run_refresh_state.force_selected_task_log_reload = true;
         let _ = self.reload_selected_task_log();
     }
 
@@ -634,9 +761,14 @@ impl App {
 
     fn open_run(&mut self, run_directory: &FilePath) -> NaoResult<()> {
         self.open_run_directory = Some(run_directory.clone());
+        self.open_run_refresh_state = OpenRunRefreshState {
+            force_detail_reload: true,
+            force_selected_task_log_reload: true,
+            force_launcher_failed_log_reload: true,
+        };
         self.events_scroll = 0;
         self.summary_scroll = 0;
-        self.refresh_open_run_detail()
+        self.refresh_open_run_artifacts()
     }
 
     fn render(&mut self, frame: &mut Frame<'_>) {
@@ -1349,6 +1481,8 @@ mod tests {
     use nao_pal::process_exited_event::ProcessExitedEvent;
     use nao_pal::process_result::ProcessResult;
     use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
+    use std::mem;
+    use std::sync::mpsc;
     use std::time::SystemTime;
 
     fn test_app() -> App {
@@ -1502,6 +1636,57 @@ mod tests {
             App::new(PalHandle::new(pal.clone()), FilePath::from("nao.kdl")).unwrap(),
             pal,
         )
+    }
+
+    fn test_app_with_active_run() -> (App, PalMock) {
+        let pal = PalMock::new();
+        pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "build" description="Build" {
+                run script="./scripts/build.sh"
+              }
+
+              task "test" description="Test" {
+                depends-on "build"
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        pal.set_file(
+            ".nao/runs/1970-01-01T00-00-00Z-test/nao-plan.json",
+            r#"{
+              "requested_tasks":["test"],
+              "tasks":[{"name":"build"},{"name":"test"}]
+            }"#,
+        );
+        pal.set_file(
+            ".nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl",
+            concat!(
+                "{\"type\":\"run_started\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"requested_tasks\":[\"test\"]}\n",
+                "{\"type\":\"task_started\",\"timestamp\":\"1970-01-01T00:00:01Z\",\"task\":\"build\"}\n"
+            ),
+        );
+        pal.set_file(
+            ".nao/runs/1970-01-01T00-00-00Z-test/build.log",
+            "[1970-01-01T00:00:01Z] stdout: compiling\n",
+        );
+
+        let mut app = App::new(PalHandle::new(pal.clone()), FilePath::from("nao.kdl")).unwrap();
+        app.open_run(&FilePath::from(".nao/runs/1970-01-01T00-00-00Z-test"))
+            .unwrap();
+        let (sender, receiver) = mpsc::channel();
+        mem::forget(sender);
+        app.active_run = Some(super::ActiveRunHandle {
+            run_directory: FilePath::from(".nao/runs/1970-01-01T00-00-00Z-test"),
+            receiver,
+        });
+        pal.clear_effects();
+
+        (app, pal)
     }
 
     #[test]
@@ -1709,6 +1894,55 @@ mod tests {
             .unwrap();
         pal.clear_effects();
 
+        app.refresh().unwrap();
+
+        pal.verify_effects(expect_test::expect![""]);
+    }
+
+    #[test]
+    fn refresh_skips_active_run_rereads_on_non_poll_ticks() {
+        let (mut app, pal) = test_app_with_active_run();
+
+        app.refresh().unwrap();
+
+        pal.verify_effects(expect_test::expect![""]);
+    }
+
+    #[test]
+    fn refresh_polls_only_selected_log_before_detail_reload() {
+        let (mut app, pal) = test_app_with_active_run();
+
+        app.refresh().unwrap();
+        app.refresh().unwrap();
+
+        pal.verify_effects(expect_test::expect![[r#"
+READ FILE: .nao/runs/1970-01-01T00-00-00Z-test/build.log
+"#]]);
+    }
+
+    #[test]
+    fn refresh_reloads_active_run_detail_on_slower_interval() {
+        let (mut app, pal) = test_app_with_active_run();
+
+        app.refresh().unwrap();
+        app.refresh().unwrap();
+        app.refresh().unwrap();
+        app.refresh().unwrap();
+
+        pal.verify_effects(expect_test::expect![[r#"
+READ FILE: .nao/runs/1970-01-01T00-00-00Z-test/build.log
+READ FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-plan.json
+READ FILE: .nao/runs/1970-01-01T00-00-00Z-test/nao-events.jsonl
+READ FILE: .nao/runs/1970-01-01T00-00-00Z-test/build.log
+"#]]);
+    }
+
+    #[test]
+    fn refresh_skips_selected_log_polling_when_auto_follow_is_disabled() {
+        let (mut app, pal) = test_app_with_active_run();
+        app.auto_follow_log = false;
+
+        app.refresh().unwrap();
         app.refresh().unwrap();
 
         pal.verify_effects(expect_test::expect![""]);
