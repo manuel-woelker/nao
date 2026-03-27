@@ -1,7 +1,9 @@
 services:
   rust:
 #    user: 1000:1000
-    image: rust:1.93.1
+    build:
+      context: .
+      dockerfile: Dockerfile
     working_dir: /work
     volumes:
       - .:/work
