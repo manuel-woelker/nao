@@ -2,6 +2,13 @@ use crate::version_metadata::VersionMetadata;
 use crate::version_metadata::load_version_metadata;
 use crate::version_metadata::render_version;
 
+pub(crate) fn render_non_interactive_default_help(argument_help: &str) -> String {
+    format!(
+        "Note: `nao` is displaying text help because this run is not attached to an interactive terminal, so it cannot open the TUI.\n\n{}",
+        render_help(argument_help)
+    )
+}
+
 pub(crate) fn render_help(argument_help: &str) -> String {
     format!(
         r#"nao {version}
@@ -10,6 +17,7 @@ pub(crate) fn render_help(argument_help: &str) -> String {
 
 Default behavior
   Running `nao` with no task names opens the TUI using `nao.kdl` in the current directory.
+  If `nao` runs without an interactive terminal, it prints text help instead of opening the TUI.
   Running `nao build test` executes the requested goal tasks and any dependencies they need.
   Running `nao --list` prints the task names defined in the selected recipe file.
   Running `nao --ci build test` disables interactive progress, prints task lifecycle updates,
@@ -153,6 +161,7 @@ fn indent_block(value: &str, spaces: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::render_help;
+    use super::render_non_interactive_default_help;
 
     #[test]
     fn help_text_documents_cli_and_recipe_format() {
@@ -193,5 +202,15 @@ OPTIONS:
         assert!(help.contains("artifact \"<name>\" path=\"<path>\""));
         assert!(help.contains("nao --init"));
         assert!(help.contains("Only lines that begin exactly with `Task outcome: ` are captured."));
+        assert!(help.contains("If `nao` runs without an interactive terminal"));
+    }
+
+    #[test]
+    fn non_interactive_help_calls_out_text_fallback() {
+        let help = render_non_interactive_default_help("USAGE:\n    nao");
+
+        assert!(help.contains("displaying text help"));
+        assert!(help.contains("cannot open the TUI"));
+        assert!(help.contains("USAGE:\n    nao"));
     }
 }

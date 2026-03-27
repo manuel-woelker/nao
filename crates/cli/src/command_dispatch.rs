@@ -1,6 +1,8 @@
 use crate::Nao;
 use crate::help_text::render_help;
+use crate::help_text::render_non_interactive_default_help;
 use crate::recipe_init::initialize_recipe_file;
+use crate::request_validation::is_default_action_request;
 use crate::request_validation::should_run_tui;
 use crate::request_validation::validate_ci_request;
 use crate::request_validation::validate_init_request;
@@ -54,6 +56,8 @@ pub(crate) fn run_with_pal_and_version_loader<F>(
 where
     F: FnOnce() -> NaoResult<VersionMetadata>,
 {
+    let interactive_terminal = pal.is_interactive_terminal();
+
     if flags.version {
         validate_version_request(&flags)?;
         println!("{}", render_version(&load_version_metadata()?));
@@ -68,7 +72,12 @@ where
 
     validate_ci_request(&flags)?;
 
-    if should_run_tui(&flags) {
+    if is_default_action_request(&flags) && !interactive_terminal {
+        print!("{}", render_non_interactive_default_help(Nao::HELP_));
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if should_run_tui(&flags, interactive_terminal) {
         validate_tui_request(&flags)?;
         let recipe_path = flags
             .config
@@ -210,5 +219,19 @@ mod tests {
         .unwrap();
 
         assert_eq!(exit_code, ExitCode::from(1));
+    }
+
+    #[test]
+    fn run_without_action_in_non_interactive_mode_returns_success_without_reading_recipe() {
+        let pal = PalMock::new();
+        let flags = Nao::from_vec(Vec::<OsString>::new()).unwrap();
+
+        let exit_code = run_with_pal_and_version_loader(flags, PalHandle::new(pal.clone()), || {
+            unreachable!("default non-interactive help should not load version metadata")
+        })
+        .unwrap();
+
+        assert_eq!(exit_code, ExitCode::SUCCESS);
+        pal.verify_effects(expect_test::expect![""]);
     }
 }

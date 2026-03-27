@@ -2,9 +2,12 @@ use crate::Nao;
 use nao_base::err;
 use nao_base::result::NaoResult;
 
-pub(crate) fn should_run_tui(flags: &Nao) -> bool {
-    (flags.tui || (!flags.version && !flags.init && !flags.list && flags.task_name.is_empty()))
-        && !flags.ci
+pub(crate) fn is_default_action_request(flags: &Nao) -> bool {
+    !flags.version && !flags.init && !flags.list && flags.task_name.is_empty() && !flags.ci
+}
+
+pub(crate) fn should_run_tui(flags: &Nao, interactive_terminal: bool) -> bool {
+    (flags.tui || (interactive_terminal && is_default_action_request(flags))) && !flags.ci
 }
 
 pub(crate) fn validate_tui_request(flags: &Nao) -> NaoResult<()> {
@@ -67,6 +70,7 @@ pub(crate) fn validate_init_request(flags: &Nao) -> NaoResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::is_default_action_request;
     use super::should_run_tui;
     use super::validate_ci_request;
     use super::validate_init_request;
@@ -209,41 +213,50 @@ mod tests {
     fn defaults_to_tui_when_no_action_is_given() {
         let flags = Nao::from_vec(Vec::<OsString>::new()).unwrap();
 
-        assert!(should_run_tui(&flags));
+        assert!(is_default_action_request(&flags));
+        assert!(should_run_tui(&flags, true));
+    }
+
+    #[test]
+    fn does_not_default_to_tui_when_no_action_is_given_in_non_interactive_mode() {
+        let flags = Nao::from_vec(Vec::<OsString>::new()).unwrap();
+
+        assert!(is_default_action_request(&flags));
+        assert!(!should_run_tui(&flags, false));
     }
 
     #[test]
     fn does_not_default_to_tui_when_listing_tasks() {
         let flags = Nao::from_vec(vec![OsString::from("--list")]).unwrap();
 
-        assert!(!should_run_tui(&flags));
+        assert!(!should_run_tui(&flags, true));
     }
 
     #[test]
     fn does_not_default_to_tui_when_tasks_are_requested() {
         let flags = Nao::from_vec(vec![OsString::from("build")]).unwrap();
 
-        assert!(!should_run_tui(&flags));
+        assert!(!should_run_tui(&flags, true));
     }
 
     #[test]
     fn does_not_default_to_tui_when_init_is_requested() {
         let flags = Nao::from_vec(vec![OsString::from("--init")]).unwrap();
 
-        assert!(!should_run_tui(&flags));
+        assert!(!should_run_tui(&flags, true));
     }
 
     #[test]
     fn does_not_default_to_tui_when_version_is_requested() {
         let flags = Nao::from_vec(vec![OsString::from("--version")]).unwrap();
 
-        assert!(!should_run_tui(&flags));
+        assert!(!should_run_tui(&flags, true));
     }
 
     #[test]
     fn does_not_default_to_tui_when_ci_is_requested() {
         let flags = Nao::from_vec(vec![OsString::from("--ci")]).unwrap();
 
-        assert!(!should_run_tui(&flags));
+        assert!(!should_run_tui(&flags, true));
     }
 }
