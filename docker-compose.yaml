@@ -1,0 +1,11 @@
+services:
+  rust:
+#    user: 1000:1000
+    image: rust:1.93.1
+    working_dir: /work
+    volumes:
+      - .:/work
+    environment:
+      CARGO_HOME: /work/.cache/cargo
+#      RUSTUP_HOME: /work/.cache/rustup
+    command: cargo build
