@@ -1,6 +1,7 @@
 mod command_dispatch;
 mod help_text;
 mod recipe_init;
+mod recipe_paths;
 mod request_validation;
 mod runner;
 mod version_metadata;
@@ -11,9 +12,9 @@ use std::process::ExitCode;
 shadow_rs::shadow!(build);
 
 xflags::xflags! {
-    /// Run local task graphs defined in a `nao.kdl` recipe.
+    /// Run local task graphs defined in a `nao.kdl` recipe file.
     cmd nao {
-        /// Create a starter `nao.kdl` in the current directory.
+        /// Create a starter `.nao/nao.kdl` in the current directory.
         optional --init
         /// List task names from the selected recipe file.
         optional --list
@@ -23,7 +24,7 @@ xflags::xflags! {
         optional --ci
         /// Print build-time version metadata.
         optional --version
-        /// Load a recipe file other than `nao.kdl`.
+        /// Load a recipe file other than the default `.nao/nao.kdl`.
         optional --config config: PathBuf
         /// Task names or wildcard selectors to execute.
         repeated task_name: String

@@ -7,15 +7,15 @@ This document is a work in progress and describes the current intended direction
 
 # Where should run output be written?
 
-Each `nao` run should create a new directory under `.nao/runs` in the same directory that contains the `nao.kdl` file used for the run.
+Each `nao` run should create a new directory under `.nao/runs`.
 
-If `nao` is executed from a repository root that contains `nao.kdl`, the output root should therefore be:
+If `nao` uses the default recipe location `.nao/nao.kdl`, the output root should therefore be:
 
 ```text
 .nao/runs
 ```
 
-If a different `nao.kdl` file is selected, the `.nao/runs` directory should be resolved relative to that file's parent directory rather than the current working directory.
+If a different recipe file is selected with `--config`, the `.nao/runs` directory should be resolved relative to that file's parent directory rather than the current working directory.
 
 # How should a run directory be named?
 

@@ -47,12 +47,12 @@ impl RunArtifactWriter {
     /// Creates a run artifact writer for one planned invocation.
     pub fn new(
         pal: PalHandle,
-        recipe_directory: &FilePath,
+        recipe_path: &FilePath,
         requested_task_names: &[String],
         run_started_at: Timestamp,
         run_started_system_time: SystemTime,
     ) -> NaoResult<Self> {
-        let run_root_directory = recipe_directory.join(".nao").join("runs").normalize();
+        let run_root_directory = run_root_directory_for_recipe_path(recipe_path);
         pal.create_directory_all(&run_root_directory)?;
         let run_directory = reserve_run_directory(
             &*pal,
@@ -71,11 +71,11 @@ impl RunArtifactWriter {
 
     /// Predicts the run directory for a run that starts at the provided time.
     pub fn preview_run_directory(
-        recipe_directory: &FilePath,
+        recipe_path: &FilePath,
         requested_task_names: &[String],
         run_started_system_time: SystemTime,
     ) -> FilePath {
-        let run_root_directory = recipe_directory.join(".nao").join("runs").normalize();
+        let run_root_directory = run_root_directory_for_recipe_path(recipe_path);
         preview_run_directory_for_time(
             &run_root_directory,
             requested_task_names,
@@ -313,6 +313,21 @@ impl RunArtifactWriter {
         }
         Ok(())
     }
+}
+
+/// Returns the `.nao/runs` directory associated with a recipe path.
+pub fn run_root_directory_for_recipe_path(recipe_path: &FilePath) -> FilePath {
+    let recipe_directory = recipe_path.parent().unwrap_or_else(|| FilePath::from("."));
+    let recipe_directory = if recipe_directory.as_str().is_empty() {
+        FilePath::from(".")
+    } else {
+        recipe_directory
+    };
+    if recipe_path.file_name() == Some("nao.kdl") && recipe_directory.file_name() == Some(".nao") {
+        return recipe_directory.join("runs").normalize();
+    }
+
+    recipe_directory.join(".nao").join("runs").normalize()
 }
 
 fn reserve_run_directory(

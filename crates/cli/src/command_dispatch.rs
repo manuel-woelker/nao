@@ -2,6 +2,8 @@ use crate::Nao;
 use crate::help_text::render_help;
 use crate::help_text::render_non_interactive_default_help;
 use crate::recipe_init::initialize_recipe_file;
+use crate::recipe_paths::primary_recipe_path;
+use crate::recipe_paths::resolve_default_recipe_path;
 use crate::request_validation::is_default_action_request;
 use crate::request_validation::should_run_tui;
 use crate::request_validation::validate_ci_request;
@@ -17,7 +19,6 @@ use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
 use nao_pal::pal::PalHandle;
 use nao_pal::pal_real::PalReal;
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 pub(crate) fn main() -> ExitCode {
@@ -66,7 +67,7 @@ where
 
     if flags.init {
         validate_init_request(&flags)?;
-        initialize_recipe_file(&*pal, &FilePath::from("nao.kdl"))?;
+        initialize_recipe_file(&*pal, &primary_recipe_path())?;
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -81,20 +82,22 @@ where
         validate_tui_request(&flags)?;
         let recipe_path = flags
             .config
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("nao.kdl"));
-        nao_tui::run(pal.clone(), FilePath::new(&recipe_path))?;
+            .as_ref()
+            .map(FilePath::new)
+            .map(Ok)
+            .unwrap_or_else(|| resolve_default_recipe_path(&*pal))?;
+        nao_tui::run(pal.clone(), recipe_path)?;
         return Ok(ExitCode::SUCCESS);
     }
 
-    let recipe_path = flags.config.unwrap_or_else(|| PathBuf::from("nao.kdl"));
+    let recipe_path = flags
+        .config
+        .as_ref()
+        .map(FilePath::new)
+        .map(Ok)
+        .unwrap_or_else(|| resolve_default_recipe_path(&*pal))?;
     let runner = Runner::new(pal);
-    let output = runner.execute(
-        &FilePath::new(&recipe_path),
-        flags.list,
-        flags.ci,
-        &flags.task_name,
-    )?;
+    let output = runner.execute(&recipe_path, flags.list, flags.ci, &flags.task_name)?;
 
     print!("{}", output.output);
     Ok(output.exit_code)
@@ -105,6 +108,7 @@ mod tests {
     use super::run_with_pal_and_version_loader;
     use crate::Nao;
     use crate::recipe_init::starter_recipe;
+    use crate::recipe_paths::PRIMARY_RECIPE_GITIGNORE_CONTENT;
     use crate::version_metadata::VersionMetadata;
     use nao_base::file_path::FilePath;
     use nao_base::shared_string::SharedString;
@@ -131,15 +135,19 @@ mod tests {
 
         assert_eq!(exit_code, ExitCode::SUCCESS);
         assert_eq!(
-            pal.read_file_string("nao.kdl").as_deref(),
+            pal.read_file_string(".nao/nao.kdl").as_deref(),
             Some(starter_recipe())
+        );
+        assert_eq!(
+            pal.read_file_string(".nao/.gitignore").as_deref(),
+            Some(PRIMARY_RECIPE_GITIGNORE_CONTENT)
         );
     }
 
     #[test]
     fn run_with_init_returns_error_when_recipe_exists() {
         let pal = PalMock::new();
-        pal.set_file("nao.kdl", "recipe \"existing\" {}");
+        pal.set_file(".nao/nao.kdl", "recipe \"existing\" {}");
         let flags = Nao::from_vec(vec![OsString::from("--init")]).unwrap();
 
         let error = run_with_pal_and_version_loader(flags, PalHandle::new(pal.clone()), || {
@@ -147,11 +155,66 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(error.to_test_string().contains("nao.kdl already exists"));
+        assert!(
+            error
+                .to_test_string()
+                .contains(".nao/nao.kdl already exists")
+        );
         assert_eq!(
-            pal.read_file_string("nao.kdl").as_deref(),
+            pal.read_file_string(".nao/nao.kdl").as_deref(),
             Some("recipe \"existing\" {}")
         );
+    }
+
+    #[test]
+    fn run_uses_legacy_recipe_path_when_primary_is_missing() {
+        let pal = PalMock::new();
+        pal.set_file(
+            "nao.kdl",
+            r#"
+            recipe "default" {
+              task "test" {
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+        );
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "./scripts/test.sh".into(),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(1),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(2),
+                    stream: nao_pal::process_output_stream::ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(3),
+                    exit_code: Some(0),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(3),
+                exit_code: Some(0),
+            },
+        );
+        let flags = Nao::from_vec(vec![OsString::from("test")]).unwrap();
+
+        let exit_code = run_with_pal_and_version_loader(flags, PalHandle::new(pal.clone()), || {
+            unreachable!("task execution should not load version metadata")
+        })
+        .unwrap();
+
+        assert_eq!(exit_code, ExitCode::SUCCESS);
+        assert!(pal.get_effects().contains("READ FILE: nao.kdl"));
     }
 
     #[test]

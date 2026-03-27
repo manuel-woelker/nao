@@ -24,7 +24,7 @@ See [`docs/RELEASE.md`](docs/RELEASE.md) for the release process.
 ## How can I use the TUI?
 
 `nao` includes a full-screen terminal UI behind the `--tui` flag.
-Run it from a repository root that contains `nao.kdl` with:
+Run it from a repository root that contains `.nao/nao.kdl` with:
 
 ```bash
 cargo run -p nao -- --tui

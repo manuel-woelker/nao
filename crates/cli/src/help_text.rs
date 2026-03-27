@@ -16,7 +16,7 @@ pub(crate) fn render_help(argument_help: &str) -> String {
 {argument_help}
 
 Default behavior
-  Running `nao` with no task names opens the TUI using `nao.kdl` in the current directory.
+  Running `nao` with no task names opens the TUI using `.nao/nao.kdl` in the current directory.
   If `nao` runs without an interactive terminal, it prints text help instead of opening the TUI.
   Running `nao build test` executes the requested goal tasks and any dependencies they need.
   Running `nao --list` prints the task names defined in the selected recipe file.
@@ -34,7 +34,7 @@ Task selection
   `nao` reserves `_` for wildcard selectors, so `test_` matches tasks whose names start with `test`.
 
 Recipe file overview
-  `nao` reads a KDL file, usually `nao.kdl`, with one top-level `recipe` node.
+  `nao` reads a KDL file, usually `.nao/nao.kdl`, with one top-level `recipe` node.
   A recipe contains:
     - an optional `config` node
     - one or more `task` nodes
@@ -178,7 +178,7 @@ mod tests {
 
 OPTIONS:
     --init
-      Create a starter `nao.kdl` in the current directory.
+      Create a starter `.nao/nao.kdl` in the current directory.
 
     --list
       List task names from the selected recipe file.
@@ -193,7 +193,7 @@ OPTIONS:
       Print build-time version metadata.
 
     --config <config>
-      Load a recipe file other than `nao.kdl`.
+      Load a recipe file other than the default `.nao/nao.kdl`.
 
     -h, --help
       Prints help information.

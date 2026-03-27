@@ -1,6 +1,7 @@
 use nao_base::file_path::FilePath;
 use nao_base::result::{NaoResult, ResultExt};
 use nao_base::shared_string::SharedString;
+use nao_engine::run_artifact_writer::run_root_directory_for_recipe_path;
 use nao_pal::pal::Pal;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -439,13 +440,7 @@ fn live_result_from_events(events: &[RunEventRecord]) -> SharedString {
 }
 
 fn run_root_directory(recipe_path: &FilePath) -> FilePath {
-    let recipe_directory = recipe_path.parent().unwrap_or_else(|| FilePath::from("."));
-    let recipe_directory = if recipe_directory.as_str().is_empty() {
-        FilePath::from(".")
-    } else {
-        recipe_directory
-    };
-    recipe_directory.join(".nao").join("runs").normalize()
+    run_root_directory_for_recipe_path(recipe_path)
 }
 
 fn run_id_from_directory(run_directory: &FilePath) -> SharedString {

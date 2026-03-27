@@ -267,9 +267,8 @@ impl App {
         let run_started_at = self.pal.now();
         let run_started_system_time = self.pal.system_time();
         let recipe_path = self.recipe_path.clone();
-        let recipe_directory = recipe_path.parent().unwrap_or_else(|| FilePath::from("."));
         let run_directory = RunArtifactWriter::preview_run_directory(
-            &recipe_directory,
+            &recipe_path,
             &plan
                 .requested_tasks
                 .iter()

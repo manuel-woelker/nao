@@ -1,6 +1,8 @@
 /target
 /.idea
-/.nao
+/.nao/*
+!/.nao/.gitignore
+!/.nao/nao.kdl
 /ballpit
 /verification/output/now
 perf.data*

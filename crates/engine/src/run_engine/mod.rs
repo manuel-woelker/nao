@@ -160,7 +160,7 @@ impl RunEngine {
         };
         let writer = RunArtifactWriter::new(
             self.pal.clone(),
-            &recipe_directory,
+            recipe_path,
             &plan
                 .requested_tasks
                 .iter()
