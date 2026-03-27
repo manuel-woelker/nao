@@ -29,7 +29,7 @@ use std::thread;
 impl RunEngine {
     pub(super) fn execute_planned_run_with_scheduler(
         &self,
-        recipe_directory: &FilePath,
+        recipe_path: &FilePath,
         plan: &PlannedRun,
         observer: &mut dyn RunObserver,
         run_started_at: Timestamp,
@@ -82,12 +82,12 @@ impl RunEngine {
 
                 let worker_sender = sender.clone();
                 let pal = self.pal.clone();
-                let worker_recipe_directory = recipe_directory.clone();
+                let worker_recipe_path = recipe_path.clone();
                 let worker_writer = writer.clone();
                 let task_name = task.name.0.clone();
                 join_handles.push(thread::spawn(move || {
                     let (task_output, log_lines, execution_result) =
-                        execute_task(pal, worker_recipe_directory, task, worker_writer);
+                        execute_task(pal, worker_recipe_path, task, worker_writer);
                     worker_sender
                         .send((task_index, task_output, log_lines, execution_result))
                         .with_context(|| {
@@ -314,14 +314,14 @@ impl RunObserver for NoopRunObserver {}
 
 fn execute_task(
     pal: PalHandle,
-    recipe_directory: FilePath,
+    recipe_path: FilePath,
     task: Task,
     writer: RunArtifactWriter,
 ) -> (SharedString, TaskLogLines, TaskExecutionResult) {
     let mut framer = LiveTaskArtifactSink::new(writer, task.name.0.clone());
 
     let execution_result =
-        match crate::run_engine::process_command::build_process_command(&recipe_directory, &task) {
+        match crate::run_engine::process_command::build_process_command(&recipe_path, &task) {
             Ok(command) => pal
                 .run_process(&command, &mut framer)
                 .map_err(|error| SharedString::from(error.to_test_string().as_str())),

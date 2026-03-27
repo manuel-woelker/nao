@@ -15,6 +15,7 @@ This project is a work in progress.
 ## What can a task be?
 
 A task can be a shell command, a Bash script, a container invocation, or another executable step.
+Container tasks currently execute as generated `docker run` commands, so Docker must be installed when you use them.
 
 ## What should I read next?
 
@@ -132,6 +133,9 @@ Use it to run the Rust container with `--build --rm` every time:
 ```
 
 Without a command, it opens an interactive Bash shell in the container.
+
+This helper is for the repository development container.
+It is separate from recipe container tasks, which run as one-shot `docker run` commands declared in `.nao/nao.kdl`.
 
 Use Flox when you want a reproducible local toolchain without opening the devcontainer.
 Use the devcontainer when you want a fully containerized editor or CLI environment.

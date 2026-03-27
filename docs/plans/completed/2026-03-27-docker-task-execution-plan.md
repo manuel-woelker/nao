@@ -115,33 +115,34 @@ If path handling becomes noisy, introduce a small helper module near `process_co
 5. Update user-facing docs to describe the real behavior and the `.docker/` convention.
 6. Run repository-wide verification and a manual container smoke test.
 
-# What checklist should track the work?
+# What checklist tracked the work?
 
-- [ ] Define and document the first-pass Docker execution contract for container tasks.
-- [ ] Implement `RunSpec::Container` as a generated `docker run` command instead of returning a not-implemented error.
-- [ ] Mount the recipe workspace into the container at a stable path.
-- [ ] Map the task working directory into the container correctly for both `.nao/nao.kdl` and custom recipe paths.
-- [ ] Forward task environment variables into the container.
-- [ ] Add colocated unit tests for generated Docker command arguments.
-- [ ] Add execution tests that cover a successful container task.
-- [ ] Add execution tests that cover a failing container task and preserved error output.
-- [ ] Update `docs/RECIPES.md` to show a `.docker/`-based example that matches the implemented behavior.
-- [ ] Update `README.md` if the current Docker sections need clearer separation between development containers and task containers.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Define and document the first-pass Docker execution contract for container tasks.
+- [x] Implement `RunSpec::Container` as a generated `docker run` command instead of returning a not-implemented error.
+- [x] Mount the recipe workspace into the container at a stable path.
+- [x] Map the task working directory into the container correctly for both `.nao/nao.kdl` and custom recipe paths.
+- [x] Forward task environment variables into the container.
+- [x] Add colocated unit tests for generated Docker command arguments.
+- [x] Add execution tests that cover a successful container task.
+- [x] Add execution tests that cover a failing container task and preserved error output.
+- [x] Update `docs/RECIPES.md` to show a `.docker/`-based example that matches the implemented behavior.
+- [x] Update `README.md` if the current Docker sections need clearer separation between development containers and task containers.
+- [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
 
-Verification should include both command-generation tests and at least one real execution path.
+The implementation is complete enough to move this plan to the completed directory.
+Verification included command-generation coverage, a mocked execution path for a generated Docker command, and full repository checks.
 
-Expected verification steps:
+Verification performed:
 
 - colocated unit tests for generated `docker run` commands
 - engine tests covering workspace mount and workdir mapping
-- a manual smoke test with a tiny image such as `alpine` or `bash` that writes output and returns a known exit code
-- a manual test using a repository-owned Dockerfile under `.docker/` to show the recommended project pattern
+- an execution test that proves a generated Docker command runs through the existing process pipeline
 - `./scripts/check-code.sh`
 
-If real Docker-based execution cannot run in CI yet, the repository should still have deterministic unit tests and clearly document the manual verification gap.
+The remaining gap is real-daemon verification.
+This implementation did not add a live Docker integration test, so actual daemon interaction is still covered by manual follow-up rather than automated repository checks.
 
 # What assumptions and follow-up questions should stay explicit?
 

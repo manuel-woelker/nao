@@ -80,6 +80,12 @@ recipe "default" {
     run script="./scripts/check-code.sh"
   }
 
+  task "hello-docker" description="Print a greeting from a container" {
+    run container="alpine:3.22" {
+      args "sh" "-lc" "printf 'hello from docker\n'; printf 'Task outcome: greeted from docker\n'"
+    }
+  }
+
   task "fail1" description="Print 1" {
     run shell="""
       printf '1\n'

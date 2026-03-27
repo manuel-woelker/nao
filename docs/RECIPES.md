@@ -99,8 +99,8 @@ recipe "default" {
 
   task "image" {
     depends-on "build"
-    run container="ghcr.io/example/packager:latest" {
-      args "--input" "target" "--output" "dist/image.tar"
+    run container="nao-packager:latest" {
+      args "sh" "-lc" "./scripts/package.sh target dist/image.tar"
     }
     artifact "container-image" path="dist/image.tar"
   }
@@ -123,6 +123,38 @@ The example shows several important ideas:
 - `ci` acts as a coordination task that depends on multiple other tasks
 - Execution can be expressed in different forms, including shell commands, scripts, and containers
 - Artifacts can be declared explicitly so produced outputs become part of the task description
+
+# How do container tasks run?
+
+Container tasks currently execute as generated `docker run` commands.
+`nao` mounts the recipe workspace into the container at `/workspace`, sets the container working directory to that mount, forwards task `env` entries with `--env`, and appends `args` after the image name.
+
+That means a task such as:
+
+```kdl
+task "image" {
+  env RUST_LOG="warn"
+  run container="alpine:3.22" {
+    args "sh" "-lc" "printf 'Task outcome: packaged\n'"
+  }
+}
+```
+
+behaves like a one-shot:
+
+```text
+docker run --rm --volume .:/workspace --workdir /workspace --env RUST_LOG=warn alpine:3.22 sh -lc ...
+```
+
+Docker must be installed and available on `PATH` for container tasks to run.
+
+# Where should repository-owned Docker assets live?
+
+Keep repository-owned Dockerfiles and Compose files under `.docker/`.
+For example, a task-specific image build can use a Dockerfile such as `.docker/tasks/packager/Dockerfile`, while the task itself references the resulting image tag explicitly.
+
+This keeps the recipe honest.
+The recipe names the image it needs, and any image build step stays visible as a separate task instead of becoming hidden `nao` behavior.
 
 # How can a task report a short outcome summary?
 

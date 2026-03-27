@@ -152,12 +152,6 @@ impl RunEngine {
         run_started_at: Timestamp,
         run_started_system_time: SystemTime,
     ) -> NaoResult<RunExecutionResult> {
-        let recipe_directory = recipe_path.parent().unwrap_or_else(|| FilePath::from("."));
-        let recipe_directory = if recipe_directory.as_str().is_empty() {
-            FilePath::from(".")
-        } else {
-            recipe_directory
-        };
         let writer = RunArtifactWriter::new(
             self.pal.clone(),
             recipe_path,
@@ -173,7 +167,7 @@ impl RunEngine {
         writer.write_run_started(plan)?;
         let (output, task_records, _task_events, run_status, failure_message) = self
             .execute_planned_run_with_scheduler(
-                &recipe_directory,
+                recipe_path,
                 plan,
                 observer,
                 run_started_at,

@@ -123,7 +123,7 @@ fn builds_shell_tasks_with_strict_bash_flags() {
         artifacts: Vec::new(),
     };
 
-    let command = build_process_command(&FilePath::from("."), &task).unwrap();
+    let command = build_process_command(&FilePath::from("nao.kdl"), &task).unwrap();
 
     #[cfg(not(windows))]
     assert_eq!(
@@ -155,6 +155,77 @@ fn builds_shell_tasks_with_strict_bash_flags() {
             arguments: vec![
                 SharedString::from("/C"),
                 SharedString::from("false\necho \"This should not be executed\""),
+            ],
+            working_directory: Some(FilePath::from(".")),
+            environment: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn builds_script_tasks_from_default_recipe_with_repository_root_working_directory() {
+    let task = nao_recipe::Task {
+        name: "check-code".into(),
+        description: None,
+        dependencies: Vec::new(),
+        run: RunSpec::Script(FilePath::from("./scripts/check-code.sh")),
+        environment: Vec::new(),
+        artifacts: Vec::new(),
+    };
+
+    let command = build_process_command(&FilePath::from(".nao/nao.kdl"), &task).unwrap();
+
+    assert_eq!(
+        command,
+        ProcessCommand {
+            executable: SharedString::from("./scripts/check-code.sh"),
+            arguments: Vec::new(),
+            working_directory: Some(FilePath::from(".")),
+            environment: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn builds_container_tasks_as_docker_run_commands() {
+    let task = nao_recipe::Task {
+        name: "image".into(),
+        description: None,
+        dependencies: Vec::new(),
+        run: RunSpec::Container(nao_recipe::ContainerRunSpec {
+            image: SharedString::from("alpine:3.22"),
+            args: vec![
+                SharedString::from("sh"),
+                SharedString::from("-lc"),
+                SharedString::from("printf hello"),
+            ],
+        }),
+        environment: vec![nao_recipe::EnvironmentSpec {
+            name: SharedString::from("RUST_LOG"),
+            value: SharedString::from("warn"),
+        }],
+        artifacts: Vec::new(),
+    };
+
+    let command = build_process_command(&FilePath::from(".nao/nao.kdl"), &task).unwrap();
+
+    assert_eq!(
+        command,
+        ProcessCommand {
+            executable: SharedString::from("docker"),
+            arguments: vec![
+                SharedString::from("run"),
+                SharedString::from("--rm"),
+                SharedString::from("--volume"),
+                SharedString::from(".:/workspace"),
+                SharedString::from("--workdir"),
+                SharedString::from("/workspace"),
+                SharedString::from("--env"),
+                SharedString::from("RUST_LOG=warn"),
+                SharedString::from("alpine:3.22"),
+                SharedString::from("sh"),
+                SharedString::from("-lc"),
+                SharedString::from("printf hello"),
             ],
             working_directory: Some(FilePath::from(".")),
             environment: Vec::new(),
@@ -196,6 +267,157 @@ fn extracts_last_task_outcome_message() {
     ]);
 
     assert_eq!(outcome.as_deref(), Some("30 tests succeeded"));
+}
+
+#[test]
+fn executes_container_tasks_with_generated_docker_command() {
+    let pal = PalMock::new();
+    pal.set_file(
+        ".nao/nao.kdl",
+        r#"
+            recipe "default" {
+              task "image" {
+                env RUST_LOG="warn"
+                run container="alpine:3.22" {
+                  args "sh" "-lc" "printf 'Task outcome: packaged\n'"
+                }
+              }
+            }
+            "#,
+    );
+    pal.set_process_execution(
+        ProcessCommand {
+            executable: SharedString::from("docker"),
+            arguments: vec![
+                SharedString::from("run"),
+                SharedString::from("--rm"),
+                SharedString::from("--volume"),
+                SharedString::from(".:/workspace"),
+                SharedString::from("--workdir"),
+                SharedString::from("/workspace"),
+                SharedString::from("--env"),
+                SharedString::from("RUST_LOG=warn"),
+                SharedString::from("alpine:3.22"),
+                SharedString::from("sh"),
+                SharedString::from("-lc"),
+                SharedString::from("printf 'Task outcome: packaged\n'"),
+            ],
+            working_directory: Some(FilePath::from(".")),
+            environment: Vec::new(),
+        },
+        vec![
+            ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(1),
+                stream: ProcessOutputStream::Stdout,
+                bytes: b"Task outcome: packaged\n".to_vec(),
+            }),
+            ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                timestamp: Timestamp::new(2),
+                stream: ProcessOutputStream::Stdout,
+            }),
+            ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                timestamp: Timestamp::new(3),
+                stream: ProcessOutputStream::Stderr,
+            }),
+            ProcessEvent::Exited(ProcessExitedEvent {
+                timestamp: Timestamp::new(4),
+                exit_code: Some(0),
+            }),
+        ],
+        ProcessResult {
+            started_at: Timestamp::new(0),
+            finished_at: Timestamp::new(4),
+            exit_code: Some(0),
+        },
+    );
+
+    let result = RunEngine::new(PalHandle::new(pal))
+        .execute_run(&FilePath::from(".nao/nao.kdl"), &["image".to_owned()])
+        .unwrap();
+
+    assert_eq!(result.status, RunStatus::Completed);
+    assert_eq!(result.total_task_count, 1);
+    assert_eq!(
+        result.task_results[0].outcome_message.as_deref(),
+        Some("packaged")
+    );
+}
+
+#[test]
+fn preserves_output_for_failed_container_tasks() {
+    let pal = PalMock::new();
+    pal.set_file(
+        ".nao/nao.kdl",
+        r#"
+            recipe "default" {
+              task "image" {
+                run container="alpine:3.22" {
+                  args "sh" "-lc" "printf 'image build failed\n' >&2; exit 5"
+                }
+              }
+            }
+            "#,
+    );
+    pal.set_process_execution(
+        ProcessCommand {
+            executable: SharedString::from("docker"),
+            arguments: vec![
+                SharedString::from("run"),
+                SharedString::from("--rm"),
+                SharedString::from("--volume"),
+                SharedString::from(".:/workspace"),
+                SharedString::from("--workdir"),
+                SharedString::from("/workspace"),
+                SharedString::from("alpine:3.22"),
+                SharedString::from("sh"),
+                SharedString::from("-lc"),
+                SharedString::from("printf 'image build failed\n' >&2; exit 5"),
+            ],
+            working_directory: Some(FilePath::from(".")),
+            environment: Vec::new(),
+        },
+        vec![
+            ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(1),
+                stream: ProcessOutputStream::Stderr,
+                bytes: b"image build failed\n".to_vec(),
+            }),
+            ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                timestamp: Timestamp::new(2),
+                stream: ProcessOutputStream::Stdout,
+            }),
+            ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                timestamp: Timestamp::new(3),
+                stream: ProcessOutputStream::Stderr,
+            }),
+            ProcessEvent::Exited(ProcessExitedEvent {
+                timestamp: Timestamp::new(4),
+                exit_code: Some(5),
+            }),
+        ],
+        ProcessResult {
+            started_at: Timestamp::new(0),
+            finished_at: Timestamp::new(4),
+            exit_code: Some(5),
+        },
+    );
+
+    let result = RunEngine::new(PalHandle::new(pal))
+        .execute_run(&FilePath::from(".nao/nao.kdl"), &["image".to_owned()])
+        .unwrap();
+
+    assert_eq!(
+        result.status,
+        RunStatus::Failed(TaskFailure {
+            task_name: SharedString::from("image"),
+            exit_code: 5,
+            elapsed_nanos: 4,
+            successful_task_count: 0,
+            omitted_output_line_count: 0,
+            output_tail_lines: vec![SharedString::from("image build failed")],
+        })
+    );
+    assert!(result.output.contains("image build failed"));
 }
 
 #[test]
