@@ -74,6 +74,7 @@ pub trait Pal: Debug + Sync + Send + 'static {
         sink: &mut dyn ProcessEventSink,
     ) -> NaoResult<ProcessResult>;
 
+    /// Returns a monotonic timestamp suitable for elapsed-time calculations and event ordering.
     fn now(&self) -> Timestamp;
 
     /// Returns the current wall clock time.
