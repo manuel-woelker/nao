@@ -234,6 +234,53 @@ fn builds_container_tasks_as_docker_run_commands() {
 }
 
 #[test]
+fn builds_compose_tasks_as_docker_compose_run_commands() {
+    let task = nao_recipe::Task {
+        name: "integration-test".into(),
+        description: None,
+        dependencies: Vec::new(),
+        run: RunSpec::Compose(nao_recipe::ComposeRunSpec {
+            directory: FilePath::from(".docker"),
+            service: SharedString::from("rust"),
+            args: vec![
+                SharedString::from("bash"),
+                SharedString::from("-lc"),
+                SharedString::from("printf hello"),
+            ],
+        }),
+        environment: vec![nao_recipe::EnvironmentSpec {
+            name: SharedString::from("RUST_LOG"),
+            value: SharedString::from("warn"),
+        }],
+        artifacts: Vec::new(),
+    };
+
+    let command = build_process_command(&FilePath::from(".nao/nao.kdl"), &task).unwrap();
+
+    assert_eq!(
+        command,
+        ProcessCommand {
+            executable: SharedString::from("docker"),
+            arguments: vec![
+                SharedString::from("compose"),
+                SharedString::from("-f"),
+                SharedString::from(".docker/docker-compose.yaml"),
+                SharedString::from("run"),
+                SharedString::from("--rm"),
+                SharedString::from("--env"),
+                SharedString::from("RUST_LOG=warn"),
+                SharedString::from("rust"),
+                SharedString::from("bash"),
+                SharedString::from("-lc"),
+                SharedString::from("printf hello"),
+            ],
+            working_directory: Some(FilePath::from(".")),
+            environment: Vec::new(),
+        }
+    );
+}
+
+#[test]
 #[cfg(not(windows))]
 fn wraps_shell_tasks_with_err_trap_reporting() {
     let script = build_bash_shell_script("false\nprintf '%s\\n' \"$MISSING\"\ncat file | sort");
@@ -418,6 +465,159 @@ fn preserves_output_for_failed_container_tasks() {
         })
     );
     assert!(result.output.contains("image build failed"));
+}
+
+#[test]
+fn executes_compose_tasks_with_generated_docker_compose_command() {
+    let pal = PalMock::new();
+    pal.set_file(
+        ".nao/nao.kdl",
+        r#"
+            recipe "default" {
+              task "compose-hello" {
+                env RUST_LOG="warn"
+                run compose=".docker" service="rust" {
+                  args "bash" "-lc" "printf 'Task outcome: greeted from compose\n'"
+                }
+              }
+            }
+            "#,
+    );
+    pal.set_process_execution(
+        ProcessCommand {
+            executable: SharedString::from("docker"),
+            arguments: vec![
+                SharedString::from("compose"),
+                SharedString::from("-f"),
+                SharedString::from(".docker/docker-compose.yaml"),
+                SharedString::from("run"),
+                SharedString::from("--rm"),
+                SharedString::from("--env"),
+                SharedString::from("RUST_LOG=warn"),
+                SharedString::from("rust"),
+                SharedString::from("bash"),
+                SharedString::from("-lc"),
+                SharedString::from("printf 'Task outcome: greeted from compose\n'"),
+            ],
+            working_directory: Some(FilePath::from(".")),
+            environment: Vec::new(),
+        },
+        vec![
+            ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(1),
+                stream: ProcessOutputStream::Stdout,
+                bytes: b"Task outcome: greeted from compose\n".to_vec(),
+            }),
+            ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                timestamp: Timestamp::new(2),
+                stream: ProcessOutputStream::Stdout,
+            }),
+            ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                timestamp: Timestamp::new(3),
+                stream: ProcessOutputStream::Stderr,
+            }),
+            ProcessEvent::Exited(ProcessExitedEvent {
+                timestamp: Timestamp::new(4),
+                exit_code: Some(0),
+            }),
+        ],
+        ProcessResult {
+            started_at: Timestamp::new(0),
+            finished_at: Timestamp::new(4),
+            exit_code: Some(0),
+        },
+    );
+
+    let result = RunEngine::new(PalHandle::new(pal))
+        .execute_run(
+            &FilePath::from(".nao/nao.kdl"),
+            &["compose-hello".to_owned()],
+        )
+        .unwrap();
+
+    assert_eq!(result.status, RunStatus::Completed);
+    assert_eq!(
+        result.task_results[0].outcome_message.as_deref(),
+        Some("greeted from compose")
+    );
+}
+
+#[test]
+fn preserves_output_for_failed_compose_tasks() {
+    let pal = PalMock::new();
+    pal.set_file(
+        ".nao/nao.kdl",
+        r#"
+            recipe "default" {
+              task "compose-hello" {
+                run compose=".docker" service="rust" {
+                  args "bash" "-lc" "printf 'compose failed\n' >&2; exit 7"
+                }
+              }
+            }
+            "#,
+    );
+    pal.set_process_execution(
+        ProcessCommand {
+            executable: SharedString::from("docker"),
+            arguments: vec![
+                SharedString::from("compose"),
+                SharedString::from("-f"),
+                SharedString::from(".docker/docker-compose.yaml"),
+                SharedString::from("run"),
+                SharedString::from("--rm"),
+                SharedString::from("rust"),
+                SharedString::from("bash"),
+                SharedString::from("-lc"),
+                SharedString::from("printf 'compose failed\n' >&2; exit 7"),
+            ],
+            working_directory: Some(FilePath::from(".")),
+            environment: Vec::new(),
+        },
+        vec![
+            ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(1),
+                stream: ProcessOutputStream::Stderr,
+                bytes: b"compose failed\n".to_vec(),
+            }),
+            ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                timestamp: Timestamp::new(2),
+                stream: ProcessOutputStream::Stdout,
+            }),
+            ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                timestamp: Timestamp::new(3),
+                stream: ProcessOutputStream::Stderr,
+            }),
+            ProcessEvent::Exited(ProcessExitedEvent {
+                timestamp: Timestamp::new(4),
+                exit_code: Some(7),
+            }),
+        ],
+        ProcessResult {
+            started_at: Timestamp::new(0),
+            finished_at: Timestamp::new(4),
+            exit_code: Some(7),
+        },
+    );
+
+    let result = RunEngine::new(PalHandle::new(pal))
+        .execute_run(
+            &FilePath::from(".nao/nao.kdl"),
+            &["compose-hello".to_owned()],
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.status,
+        RunStatus::Failed(TaskFailure {
+            task_name: SharedString::from("compose-hello"),
+            exit_code: 7,
+            elapsed_nanos: 4,
+            successful_task_count: 0,
+            omitted_output_line_count: 0,
+            output_tail_lines: vec![SharedString::from("compose failed")],
+        })
+    );
 }
 
 #[test]

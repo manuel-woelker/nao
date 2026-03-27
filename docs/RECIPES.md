@@ -105,6 +105,12 @@ recipe "default" {
     artifact "container-image" path="dist/image.tar"
   }
 
+  task "integration-test" {
+    run compose=".docker" service="rust" {
+      args "bash" "-lc" "cargo test --workspace"
+    }
+  }
+
   task "ci" {
     depends-on "lint"
     depends-on "test"
@@ -120,6 +126,7 @@ The example shows several important ideas:
 
 - `build`, `lint`, and `verify-docs` can start immediately because they have no prerequisites
 - `test` and `image` wait for `build`
+- `integration-test` uses the checked-in Compose project under `.docker/`
 - `ci` acts as a coordination task that depends on multiple other tasks
 - Execution can be expressed in different forms, including shell commands, scripts, and containers
 - Artifacts can be declared explicitly so produced outputs become part of the task description
@@ -147,6 +154,31 @@ docker run --rm --volume .:/workspace --workdir /workspace --env RUST_LOG=warn a
 ```
 
 Docker must be installed and available on `PATH` for container tasks to run.
+
+# How do Compose tasks run?
+
+Compose tasks execute as generated `docker compose` commands.
+`nao` resolves the declared Compose directory relative to the recipe workspace and then runs:
+
+```text
+docker compose -f <directory>/docker-compose.yaml run --rm [--env NAME=value ...] <service> [args...]
+```
+
+This keeps volumes, networks, build settings, and related configuration inside the Compose project where they belong.
+
+For example:
+
+```kdl
+task "integration-test" {
+  env RUST_LOG="warn"
+  run compose=".docker" service="rust" {
+    args "bash" "-lc" "cargo test --workspace"
+  }
+}
+```
+
+Use container tasks for one-shot single-container commands.
+Use Compose tasks when the service relies on Compose-managed configuration such as volumes.
 
 # Where should repository-owned Docker assets live?
 

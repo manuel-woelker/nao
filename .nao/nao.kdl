@@ -86,6 +86,12 @@ recipe "default" {
     }
   }
 
+  task "hello-compose" description="Print a greeting through the checked-in Compose service" {
+    run compose=".docker" service="rust" {
+      args "bash" "-lc" "printf 'hello from compose\n'; printf 'Task outcome: greeted from compose\n'"
+    }
+  }
+
   task "fail1" description="Print 1" {
     run shell="""
       printf '1\n'

@@ -1,3 +1,4 @@
+use crate::compose_run_spec::ComposeRunSpec;
 use nao_base::file_path::FilePath;
 use nao_base::shared_string::SharedString;
 
@@ -19,4 +20,6 @@ pub enum RunSpec {
     Script(FilePath),
     /// Executes a container image.
     Container(ContainerRunSpec),
+    /// Executes a Docker Compose service.
+    Compose(ComposeRunSpec),
 }

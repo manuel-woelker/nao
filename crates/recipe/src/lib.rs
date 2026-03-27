@@ -1,4 +1,5 @@
 pub mod artifact_spec;
+pub mod compose_run_spec;
 pub mod dependency_name;
 pub mod environment_spec;
 pub mod failure_mode;
@@ -12,6 +13,7 @@ pub mod task;
 pub mod task_name;
 
 pub use artifact_spec::ArtifactSpec;
+pub use compose_run_spec::ComposeRunSpec;
 pub use dependency_name::DependencyName;
 pub use environment_spec::EnvironmentSpec;
 pub use failure_mode::FailureMode;

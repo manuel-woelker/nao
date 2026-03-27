@@ -65,12 +65,12 @@ That keeps the engine aligned with the current process runner and avoids buildin
 Recommended first-pass command shape:
 
 ```text
-docker compose --project-directory <resolved-dir> run --rm [--env NAME=value ...] <service> [args...]
+docker compose -f <resolved-dir>/docker-compose.yaml run --rm [--env NAME=value ...] <service> [args...]
 ```
 
 Key points:
 
-- use `--project-directory` so Docker Compose resolves files and relative paths from the declared Compose directory
+- resolve the Compose directory to the standard checked-in file `<directory>/docker-compose.yaml`
 - run the service with `run --rm` so task containers do not accumulate
 - pass task `env` entries as CLI `--env` flags rather than mutating the process environment
 - append task `args` after the service name
@@ -116,7 +116,7 @@ The implementation will likely touch these areas:
 - [crates/recipe/src/parse_recipe.rs](/data/projects/nao/crates/recipe/src/parse_recipe.rs)
   Parse `compose` and `service` properties and reuse `args` parsing.
 - [crates/engine/src/run_engine/process_command.rs](/data/projects/nao/crates/engine/src/run_engine/process_command.rs)
-  Generate the `docker compose --project-directory ... run --rm ...` command.
+  Generate the `docker compose -f ... run --rm ...` command.
 - [crates/engine/src/run_artifact_writer.rs](/data/projects/nao/crates/engine/src/run_artifact_writer.rs)
   Persist Compose run metadata in `nao-plan.json`.
 - [crates/cli/src/help_text.rs](/data/projects/nao/crates/cli/src/help_text.rs)
@@ -138,43 +138,46 @@ The implementation will likely touch these areas:
 8. Update help text and recipe documentation.
 9. Run repository-wide verification.
 
-# What checklist should track the work?
+# What checklist tracked the work?
 
-- [ ] Add a `RunSpec::Compose` variant and a dedicated spec struct.
-- [ ] Parse `run compose="..." service="..."` with optional `args`.
-- [ ] Reject `run` nodes that mix `compose` with other execution modes.
-- [ ] Resolve Compose directories relative to the recipe workspace.
-- [ ] Generate `docker compose --project-directory ... run --rm ...` commands.
-- [ ] Forward task environment variables as Compose CLI `--env` flags.
-- [ ] Persist Compose run metadata in `nao-plan.json`.
-- [ ] Add parser tests for valid and invalid Compose task definitions.
-- [ ] Add engine tests for generated Compose commands.
-- [ ] Add execution tests for successful and failing Compose-backed tasks.
-- [ ] Add a `nao` task that runs the checked-in Compose service from `.docker/`.
-- [ ] Update CLI help text to document the new execution mode.
-- [ ] Update `docs/RECIPES.md` with a `.docker/`-based example.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Add a `RunSpec::Compose` variant and a dedicated spec struct.
+- [x] Parse `run compose="..." service="..."` with optional `args`.
+- [x] Reject `run` nodes that mix `compose` with other execution modes.
+- [x] Resolve Compose directories relative to the recipe workspace.
+- [x] Generate `docker compose -f ... run --rm ...` commands.
+- [x] Forward task environment variables as Compose CLI `--env` flags.
+- [x] Persist Compose run metadata in `nao-plan.json`.
+- [x] Add parser tests for valid and invalid Compose task definitions.
+- [x] Add engine tests for generated Compose commands.
+- [x] Add execution tests for successful and failing Compose-backed tasks.
+- [x] Add a `nao` task that runs the checked-in Compose service from `.docker/`.
+- [x] Update CLI help text to document the new execution mode.
+- [x] Update `docs/RECIPES.md` with a `.docker/`-based example.
+- [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
 
-Verification should include both parser coverage and engine coverage.
+This implementation is complete enough to move the plan to the completed directory.
+Verification covered the parser, generated command shapes, mocked execution, a real checked-in Compose task, and repository-wide checks.
 
-Expected verification steps:
+Verification performed:
 
 - parser tests for valid Compose tasks
-- parser tests for conflicting `run` mode definitions
+- parser tests for invalid Compose task definitions
 - engine tests for generated `docker compose` arguments
 - execution tests showing that stdout, stderr, exit codes, and task outcomes still flow through the existing pipeline
+- `cargo run -- hello-compose`
 - `./scripts/check-code.sh`
 
-If live Compose execution is not available in automated checks, deterministic mocked execution tests are still required, and any manual daemon-level verification gap should be called out explicitly.
+The one remaining gap is broader daemon portability beyond the checked-in Compose task.
+This work now has one real smoke test against `.docker/docker-compose.yaml`, but it does not add a larger matrix of live Compose environments to automated repository checks.
 
 # What assumptions and follow-up questions should stay explicit?
 
 This plan assumes:
 
 - Docker Compose is available through `docker compose`
-- the Compose directory contains a standard Compose project layout that Docker can resolve from `--project-directory`
+- the Compose directory contains a standard checked-in `docker-compose.yaml`
 - naming a directory is sufficient for the first version
 - one service per task is the right initial granularity
 

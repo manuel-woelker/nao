@@ -1,4 +1,5 @@
 use crate::artifact_spec::ArtifactSpec;
+use crate::compose_run_spec::ComposeRunSpec;
 use crate::dependency_name::DependencyName;
 use crate::environment_spec::EnvironmentSpec;
 use crate::failure_mode::FailureMode;
@@ -309,19 +310,34 @@ fn parse_run(source: &str, node: &KdlNode, task_name: &str) -> Result<RunSpec, R
     let shell = parse_optional_string_property(source, node, "shell")?;
     let script = parse_optional_string_property(source, node, "script")?;
     let container = parse_optional_string_property(source, node, "container")?;
+    let compose = parse_optional_string_property(source, node, "compose")?;
+    let service = parse_optional_string_property(source, node, "service")?;
 
-    let defined = [shell.is_some(), script.is_some(), container.is_some()]
-        .into_iter()
-        .filter(|present| *present)
-        .count();
+    let defined = [
+        shell.is_some(),
+        script.is_some(),
+        container.is_some(),
+        compose.is_some(),
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count();
 
     if defined != 1 {
         return Err(recipe_error_for_node(
             source,
             node,
             format!(
-                "task `{task_name}` run node must define exactly one of `shell`, `script`, or `container`"
+                "task `{task_name}` run node must define exactly one of `shell`, `script`, `container`, or `compose`"
             ),
+        ));
+    }
+
+    if service.is_some() && compose.is_none() {
+        return Err(recipe_error_for_node(
+            source,
+            node,
+            format!("task `{task_name}` run node can only use `service` together with `compose`"),
         ));
     }
 
@@ -335,23 +351,38 @@ fn parse_run(source: &str, node: &KdlNode, task_name: &str) -> Result<RunSpec, R
         return Ok(RunSpec::Script(FilePath::from(script)));
     }
 
-    let args = parse_container_args(source, node, task_name)?;
-    let image = container.ok_or_else(|| {
+    let args = parse_run_args(source, node, task_name, "run")?;
+    if let Some(image) = container {
+        return Ok(RunSpec::Container(ContainerRunSpec { image, args }));
+    }
+    let directory = compose.ok_or_else(|| {
         recipe_error_for_node(
             source,
             node,
             format!(
-                "task `{task_name}` run node must define exactly one of `shell`, `script`, or `container`"
+                "task `{task_name}` run node must define exactly one of `shell`, `script`, `container`, or `compose`"
             ),
         )
     })?;
-    Ok(RunSpec::Container(ContainerRunSpec { image, args }))
+    let service = service.ok_or_else(|| {
+        recipe_error_for_node(
+            source,
+            node,
+            format!("task `{task_name}` compose run must define a `service` property"),
+        )
+    })?;
+    Ok(RunSpec::Compose(ComposeRunSpec {
+        directory: FilePath::from(directory),
+        service,
+        args,
+    }))
 }
 
-fn parse_container_args(
+fn parse_run_args(
     source: &str,
     node: &KdlNode,
     task_name: &str,
+    run_kind: &str,
 ) -> Result<Vec<SharedString>, RecipeError> {
     let Some(children) = node.children() else {
         return Ok(Vec::new());
@@ -363,7 +394,7 @@ fn parse_container_args(
             return Err(recipe_error_for_node(
                 source,
                 child,
-                format!("task `{task_name}` container run only supports `args` child nodes"),
+                format!("task `{task_name}` {run_kind} only supports `args` child nodes"),
             ));
         }
 
@@ -372,10 +403,14 @@ fn parse_container_args(
                 return Err(recipe_error_for_entry(
                     source,
                     entry,
-                    format!("task `{task_name}` container args must use positional string values"),
+                    format!("task `{task_name}` {run_kind} args must use positional string values"),
                 ));
             }
-            args.push(parse_string_value(source, entry, "container argument")?);
+            args.push(parse_string_value(
+                source,
+                entry,
+                &format!("{run_kind} argument"),
+            )?);
         }
     }
 
@@ -707,6 +742,12 @@ mod tests {
                 }
                 artifact "container-image" path="dist/image.tar"
               }
+
+              task "integration-test" {
+                run compose=".docker" service="rust" {
+                  args "bash" "-lc" "cargo test --workspace"
+                }
+              }
             }
             "#,
         )
@@ -714,7 +755,7 @@ mod tests {
 
         assert_eq!(recipe.name, SharedString::from("default"));
         assert_eq!(recipe.config, RecipeConfig::default());
-        assert_eq!(recipe.tasks.len(), 5);
+        assert_eq!(recipe.tasks.len(), 6);
         assert_eq!(
             recipe.tasks[0].description,
             Some(SharedString::from("Build the workspace"))
@@ -730,6 +771,12 @@ mod tests {
         };
         assert_eq!(container.args.len(), 4);
         assert_eq!(recipe.tasks[4].artifacts[0].path.as_str(), "dist/image.tar");
+        let RunSpec::Compose(compose) = &recipe.tasks[5].run else {
+            panic!("expected compose run");
+        };
+        assert_eq!(compose.directory.as_str(), ".docker");
+        assert_eq!(compose.service.as_str(), "rust");
+        assert_eq!(compose.args.len(), 3);
     }
 
     #[test]
@@ -997,12 +1044,32 @@ mod tests {
         let rendered = error.to_test_string();
 
         assert!(rendered.contains(
-            "task `build` run node must define exactly one of `shell`, `script`, or `container`"
+            "task `build` run node must define exactly one of `shell`, `script`, `container`, or `compose`"
         ));
         assert!(rendered.contains("--> line 4, column 17"));
         assert!(
             rendered
                 .contains("4 |                 run shell=\"cargo build\" script=\"./build.sh\"")
+        );
+    }
+
+    #[test]
+    fn rejects_compose_without_service() {
+        let error = parse_recipe(
+            r#"
+            recipe "default" {
+              task "integration-test" {
+                run compose=".docker"
+              }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("task `integration-test` compose run must define a `service` property")
         );
     }
 

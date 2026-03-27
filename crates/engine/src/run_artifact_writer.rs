@@ -391,6 +391,12 @@ fn task_plan_json(task: &Task) -> serde_json::Value {
             "image": container.image.as_str(),
             "args": container.args.iter().map(|arg| arg.as_str()).collect::<Vec<_>>(),
         }),
+        RunSpec::Compose(compose) => json!({
+            "kind": "compose",
+            "directory": compose.directory.as_str(),
+            "service": compose.service.as_str(),
+            "args": compose.args.iter().map(|arg| arg.as_str()).collect::<Vec<_>>(),
+        }),
     };
 
     json!({

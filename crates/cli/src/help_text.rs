@@ -85,6 +85,11 @@ Task child nodes
   }}
     Run a container command.
 
+  run compose="<directory>" service="<service>" {{
+    args "--flag" "value"
+  }}
+    Run a Docker Compose service from a project directory.
+
   env NAME="value"
     Define an environment variable for the task.
 

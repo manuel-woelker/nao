@@ -16,6 +16,7 @@ This project is a work in progress.
 
 A task can be a shell command, a Bash script, a container invocation, or another executable step.
 Container tasks currently execute as generated `docker run` commands, so Docker must be installed when you use them.
+Compose-backed tasks execute as generated `docker compose` commands and are intended for services that rely on Compose-managed configuration such as volumes.
 
 ## What should I read next?
 

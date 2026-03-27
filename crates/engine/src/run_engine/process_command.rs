@@ -3,7 +3,7 @@ use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
 use nao_pal::process_command::ProcessCommand;
 use nao_pal::process_environment_variable::ProcessEnvironmentVariable;
-use nao_recipe::{RunSpec, Task};
+use nao_recipe::{ComposeRunSpec, RunSpec, Task};
 
 pub(super) fn build_process_command(
     recipe_path: &FilePath,
@@ -63,6 +63,12 @@ pub(super) fn build_process_command(
             working_directory: Some(workspace_directory),
             environment: Vec::new(),
         }),
+        RunSpec::Compose(compose) => Ok(ProcessCommand {
+            executable: SharedString::from("docker"),
+            arguments: build_docker_compose_run_arguments(compose, &environment),
+            working_directory: Some(workspace_directory),
+            environment: Vec::new(),
+        }),
     }
 }
 
@@ -84,6 +90,26 @@ fn build_docker_run_arguments(
     }
     arguments.push(container.image.clone());
     arguments.extend(container.args.iter().cloned());
+    arguments
+}
+
+fn build_docker_compose_run_arguments(
+    compose: &ComposeRunSpec,
+    environment: &[ProcessEnvironmentVariable],
+) -> Vec<SharedString> {
+    let mut arguments = vec![
+        SharedString::from("compose"),
+        SharedString::from("-f"),
+        SharedString::from(compose.directory.join("docker-compose.yaml").as_str()),
+        SharedString::from("run"),
+        SharedString::from("--rm"),
+    ];
+    for variable in environment {
+        arguments.push(SharedString::from("--env"));
+        arguments.push(format!("{}={}", variable.name.as_str(), variable.value.as_str()).into());
+    }
+    arguments.push(compose.service.clone());
+    arguments.extend(compose.args.iter().cloned());
     arguments
 }
 
