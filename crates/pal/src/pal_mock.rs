@@ -9,6 +9,7 @@ use nao_base::file_path::FilePath;
 use nao_base::result::{NaoResult, OptionExt};
 use nao_base::timestamp::Timestamp;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -24,6 +25,7 @@ pub struct PalMock {
 struct PalMockInner {
     effects_string: String,
     file_map: HashMap<FilePath, Vec<u8>>,
+    directories: HashSet<FilePath>,
     process_executions: HashMap<ProcessCommand, (Vec<ProcessEvent>, ProcessResult, Duration)>,
     interactive_terminal: bool,
     default_parallelism: usize,
@@ -37,6 +39,7 @@ impl PalMock {
             inner: Arc::new(RwLock::new(PalMockInner {
                 effects_string: String::new(),
                 file_map: HashMap::new(),
+                directories: HashSet::new(),
                 process_executions: HashMap::new(),
                 interactive_terminal: false,
                 default_parallelism: 1,
@@ -71,6 +74,10 @@ impl PalMock {
             .write()
             .file_map
             .insert(FilePath::from(file_path), content.into());
+    }
+
+    pub fn set_directory(&self, path: &str) {
+        self.inner.write().directories.insert(FilePath::from(path));
     }
 
     pub fn set_process_execution(
@@ -173,7 +180,18 @@ impl Pal for PalMock {
 
     fn create_directory_all(&self, path: &FilePath) -> NaoResult<()> {
         self.log_effect(format!("CREATE DIRECTORY: {path}"));
+        self.inner.write().directories.insert(path.clone());
         Ok(())
+    }
+
+    fn create_directory(&self, path: &FilePath) -> NaoResult<bool> {
+        self.log_effect(format!("CREATE DIRECTORY: {path}"));
+        let mut inner = self.inner.write();
+        if inner.directories.contains(path) {
+            return Ok(false);
+        }
+        inner.directories.insert(path.clone());
+        Ok(true)
     }
 
     fn write_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()> {
@@ -257,6 +275,11 @@ impl Pal for PalMock {
 
     fn system_time(&self) -> SystemTime {
         self.inner.read().current_system_time
+    }
+
+    fn sleep(&self, duration: Duration) {
+        self.log_effect(format!("SLEEP: {}ms", duration.as_millis()));
+        self.inner.write().current_system_time += duration;
     }
 }
 

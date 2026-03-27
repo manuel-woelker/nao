@@ -46,9 +46,9 @@ impl App {
             return Ok(());
         };
         match active_run.receiver.try_recv() {
-            Ok(Ok(_result)) => {
+            Ok(Ok(result)) => {
                 self.status_message = Some(SharedString::from("run completed"));
-                let completed_run_directory = active_run.run_directory.clone();
+                let completed_run_directory = result.run_directory.clone();
                 self.active_run = None;
                 self.reload_history()?;
                 self.open_run(&completed_run_directory)?;

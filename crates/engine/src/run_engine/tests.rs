@@ -1042,3 +1042,123 @@ fn stops_launching_new_tasks_after_concurrent_failure() {
                 && line.contains("\"type\":\"task_started\""))
     );
 }
+
+#[test]
+fn retries_run_directory_reservation_on_collision() {
+    let pal = PalMock::new();
+    pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+    pal.set_directory(".nao/runs/1970-01-01T00-00-00Z-test");
+    pal.set_file(
+        "nao.kdl",
+        r#"
+            recipe "default" {
+              task "test" {
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+    );
+    set_script_process(&pal, "./scripts/test.sh", &[b"ok\n"], 0);
+    let engine = RunEngine::new(PalHandle::new(pal.clone()));
+
+    let result = engine
+        .execute_run(&FilePath::from("nao.kdl"), &["test".to_owned()])
+        .unwrap();
+
+    assert_eq!(
+        result.run_directory,
+        FilePath::from(".nao/runs/1970-01-01T00-00-01Z-test")
+    );
+    pal.verify_effects(expect![
+        r#"READ FILE: nao.kdl
+CREATE DIRECTORY: .nao/runs
+CREATE DIRECTORY: .nao/runs/1970-01-01T00-00-00Z-test
+SLEEP: 1000ms
+CREATE DIRECTORY: .nao/runs/1970-01-01T00-00-01Z-test
+WRITE FILE: .nao/runs/1970-01-01T00-00-01Z-test/nao-plan.json -> {
+  "requested_tasks": [
+    "test"
+  ],
+  "tasks": [
+    {
+      "artifacts": [],
+      "dependencies": [],
+      "description": null,
+      "environment": [],
+      "name": "test",
+      "run": {
+        "kind": "script",
+        "path": "./scripts/test.sh"
+      }
+    }
+  ]
+}
+WRITE FILE: .nao/runs/1970-01-01T00-00-01Z-test/nao-events.jsonl -> {"requested_tasks":["test"],"timestamp":"1970-01-01T00:00:00Z","type":"run_started"}
+
+APPEND FILE: .nao/runs/1970-01-01T00-00-01Z-test/nao-events.jsonl -> {"task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_started"}
+
+RUN PROCESS: ./scripts/test.sh 
+APPEND FILE: .nao/runs/1970-01-01T00-00-01Z-test/test.log -> [1970-01-01T00:00:00Z] stdout: ok
+
+APPEND FILE: .nao/runs/1970-01-01T00-00-01Z-test/nao-events.jsonl -> {"duration_nanos":"4","exit_code":0,"outcome_message":null,"result":"success","status":"completed","task":"test","timestamp":"1970-01-01T00:00:00Z","type":"task_finished"}
+
+APPEND FILE: .nao/runs/1970-01-01T00-00-01Z-test/nao-events.jsonl -> {"result":"completed","timestamp":"1970-01-01T00:00:00Z","type":"run_finished"}
+
+WRITE FILE: .nao/runs/1970-01-01T00-00-01Z-test/nao-summary.json -> {
+  "failure_message": null,
+  "result": "completed",
+  "run": {
+    "duration_nanos": "0",
+    "finished_at": "1970-01-01T00:00:00Z",
+    "requested_tasks": [
+      "test"
+    ],
+    "started_at": "1970-01-01T00:00:00Z"
+  },
+  "tasks": [
+    {
+      "duration_nanos": "4",
+      "exit_code": 0,
+      "finished_at": "1970-01-01T00:00:00Z",
+      "log_file": "test.log",
+      "name": "test",
+      "outcome_message": null,
+      "result": "success",
+      "started_at": "1970-01-01T00:00:00Z",
+      "status": "completed"
+    }
+  ]
+}
+"#
+    ]);
+}
+
+#[test]
+fn errors_after_thirty_run_directory_collisions() {
+    let pal = PalMock::new();
+    pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+    for second in 0..30 {
+        pal.set_directory(&format!(".nao/runs/1970-01-01T00-00-{second:02}Z-test"));
+    }
+    pal.set_file(
+        "nao.kdl",
+        r#"
+            recipe "default" {
+              task "test" {
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+    );
+    let engine = RunEngine::new(PalHandle::new(pal));
+
+    let error = engine
+        .execute_run(&FilePath::from("nao.kdl"), &["test".to_owned()])
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_test_string()
+            .contains("Unable to reserve a unique run directory after 30 attempts")
+    );
+}

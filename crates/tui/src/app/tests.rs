@@ -478,6 +478,57 @@ fn refresh_skips_selected_log_polling_when_auto_follow_is_disabled() {
 }
 
 #[test]
+fn refresh_uses_completed_run_directory_from_engine_result() {
+    let pal = PalMock::new();
+    pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+    pal.set_file(
+        "nao.kdl",
+        r#"
+            recipe "default" {
+              task "build" description="Build" {
+                run script="./scripts/build.sh"
+              }
+            }
+            "#,
+    );
+    let mut app = App::new(PalHandle::new(pal.clone()), FilePath::from("nao.kdl")).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    sender
+        .send(Ok(nao_engine::RunExecutionResult {
+            output: SharedString::empty(),
+            goal_tasks: vec![SharedString::from("build")],
+            total_task_count: 1,
+            duration_nanos: 0,
+            run_directory: FilePath::from(".nao/runs/1970-01-01T00-00-01Z-build"),
+            task_results: Vec::new(),
+            goal_outcome_message: None,
+            status: nao_engine::RunStatus::Completed,
+        }))
+        .unwrap();
+    app.active_run = Some(ActiveRunHandle {
+        run_directory: FilePath::from(".nao/runs/1970-01-01T00-00-00Z-build"),
+        receiver,
+    });
+    pal.set_file(
+        ".nao/runs/1970-01-01T00-00-01Z-build/nao-summary.json",
+        r#"{
+              "result":"completed",
+              "failure_message":null,
+              "run":{"requested_tasks":["build"],"duration_nanos":"0"},
+              "tasks":[]
+            }"#,
+    );
+    pal.clear_effects();
+
+    app.refresh().unwrap();
+
+    assert_eq!(
+        app.open_run_directory,
+        Some(FilePath::from(".nao/runs/1970-01-01T00-00-01Z-build"))
+    );
+}
+
+#[test]
 fn renders_task_state_emojis() {
     assert_eq!(render_task_state_emoji("pending", 0), "⚪");
     assert_eq!(render_task_state_emoji("running", 0), "⠋ ");

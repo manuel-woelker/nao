@@ -298,6 +298,16 @@ impl Pal for PalReal {
         Ok(())
     }
 
+    fn create_directory(&self, path: &FilePath) -> NaoResult<bool> {
+        match std::fs::create_dir(self.resolve_process_path(path)?) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => {
+                Err(error).with_context(|| format!("Unable to create directory '{}'", path))
+            }
+        }
+    }
+
     fn write_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()> {
         std::fs::write(self.resolve_process_path(path)?, content)
             .with_context(|| format!("Unable to write file '{}'", path))?;
@@ -344,6 +354,10 @@ impl Pal for PalReal {
 
     fn system_time(&self) -> SystemTime {
         SystemTime::now()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        std::thread::sleep(duration);
     }
 }
 

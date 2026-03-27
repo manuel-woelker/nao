@@ -167,7 +167,7 @@ impl RunEngine {
                 .collect::<Vec<_>>(),
             run_started_at,
             run_started_system_time,
-        );
+        )?;
         writer.write_plan(plan)?;
         writer.write_run_started(plan)?;
         let (output, task_records, _task_events, run_status, failure_message) = self

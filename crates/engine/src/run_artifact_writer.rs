@@ -11,11 +11,13 @@ use serde_json::json;
 use std::time::{Duration, SystemTime};
 use time::OffsetDateTime;
 
+const RUN_DIRECTORY_RETRY_LIMIT: usize = 30;
+const RUN_DIRECTORY_RETRY_DELAY: Duration = Duration::from_secs(1);
+
 /// Writes `.nao/runs` artifacts for one executed run.
 #[derive(Clone)]
 pub struct RunArtifactWriter {
     pal: PalHandle,
-    run_root_directory: FilePath,
     run_directory: FilePath,
     run_started_at: Timestamp,
     run_started_system_time: SystemTime,
@@ -49,22 +51,22 @@ impl RunArtifactWriter {
         requested_task_names: &[String],
         run_started_at: Timestamp,
         run_started_system_time: SystemTime,
-    ) -> Self {
+    ) -> NaoResult<Self> {
         let run_root_directory = recipe_directory.join(".nao").join("runs").normalize();
-        let run_directory_name = format!(
-            "{}-{}",
-            format_file_safe_iso8601(run_started_system_time),
-            sanitize_file_component(&requested_task_names.join("+"))
-        );
-        let run_directory = run_root_directory.join(run_directory_name).normalize();
+        pal.create_directory_all(&run_root_directory)?;
+        let run_directory = reserve_run_directory(
+            &*pal,
+            &run_root_directory,
+            requested_task_names,
+            run_started_system_time,
+        )?;
 
-        Self {
+        Ok(Self {
             pal,
-            run_root_directory,
             run_directory: run_directory.clone(),
             run_started_at,
             run_started_system_time,
-        }
+        })
     }
 
     /// Predicts the run directory for a run that starts at the provided time.
@@ -74,12 +76,11 @@ impl RunArtifactWriter {
         run_started_system_time: SystemTime,
     ) -> FilePath {
         let run_root_directory = recipe_directory.join(".nao").join("runs").normalize();
-        let run_directory_name = format!(
-            "{}-{}",
-            format_file_safe_iso8601(run_started_system_time),
-            sanitize_file_component(&requested_task_names.join("+"))
-        );
-        run_root_directory.join(run_directory_name).normalize()
+        preview_run_directory_for_time(
+            &run_root_directory,
+            requested_task_names,
+            run_started_system_time,
+        )
     }
 
     /// Returns the run directory for this execution.
@@ -89,8 +90,6 @@ impl RunArtifactWriter {
 
     /// Creates the run directory and writes the planned run description.
     pub fn write_plan(&self, planned_run: &PlannedRun) -> NaoResult<()> {
-        self.pal.create_directory_all(&self.run_root_directory)?;
-        self.pal.create_directory_all(&self.run_directory)?;
         self.pal.write_file(
             &self.run_directory.join("nao-plan.json"),
             serde_json::to_vec_pretty(&json!({
@@ -314,6 +313,47 @@ impl RunArtifactWriter {
         }
         Ok(())
     }
+}
+
+fn reserve_run_directory(
+    pal: &dyn nao_pal::pal::Pal,
+    run_root_directory: &FilePath,
+    requested_task_names: &[String],
+    run_started_system_time: SystemTime,
+) -> NaoResult<FilePath> {
+    for attempt in 0..RUN_DIRECTORY_RETRY_LIMIT {
+        let candidate_time =
+            run_started_system_time + Duration::from_secs(u64::try_from(attempt).unwrap_or(0));
+        let run_directory = preview_run_directory_for_time(
+            run_root_directory,
+            requested_task_names,
+            candidate_time,
+        );
+        if pal.create_directory(&run_directory)? {
+            return Ok(run_directory);
+        }
+        if attempt + 1 < RUN_DIRECTORY_RETRY_LIMIT {
+            pal.sleep(RUN_DIRECTORY_RETRY_DELAY);
+        }
+    }
+
+    Err(nao_base::err!(
+        "Unable to reserve a unique run directory after {} attempts",
+        RUN_DIRECTORY_RETRY_LIMIT
+    ))
+}
+
+fn preview_run_directory_for_time(
+    run_root_directory: &FilePath,
+    requested_task_names: &[String],
+    run_started_system_time: SystemTime,
+) -> FilePath {
+    let run_directory_name = format!(
+        "{}-{}",
+        format_file_safe_iso8601(run_started_system_time),
+        sanitize_file_component(&requested_task_names.join("+"))
+    );
+    run_root_directory.join(run_directory_name).normalize()
 }
 
 /// Returns the persisted task log file name for a task.
