@@ -120,6 +120,19 @@ flox activate -- cargo build --workspace
 flox activate -- cargo nextest run --workspace --all-targets --all-features
 ```
 
+## How can I use the Docker runner?
+
+This repository includes a Compose-based Rust runner under [`.docker/docker-compose.yaml`](/data/projects/nao/.docker/docker-compose.yaml) and a wrapper script at [`scripts/docker.sh`](/data/projects/nao/scripts/docker.sh).
+
+Use it to run the Rust container with `--build --rm` every time:
+
+```bash
+./scripts/docker.sh scripts/check-code.sh
+./scripts/docker.sh cargo build --workspace
+```
+
+Without a command, it opens an interactive Bash shell in the container.
+
 Use Flox when you want a reproducible local toolchain without opening the devcontainer.
 Use the devcontainer when you want a fully containerized editor or CLI environment.
 Use [`./dev-shell.sh`](./dev-shell.sh) when you want the shortest path into the checked-in Flox environment.

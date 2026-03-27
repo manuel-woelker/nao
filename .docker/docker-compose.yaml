@@ -2,11 +2,11 @@ services:
   rust:
 #    user: 1000:1000
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: .docker/Dockerfile
     working_dir: /work
     volumes:
-      - .:/work
+      - ..:/work
     environment:
       CARGO_HOME: /work/.cache/cargo
 #      RUSTUP_HOME: /work/.cache/rustup
