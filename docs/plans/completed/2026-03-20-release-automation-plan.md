@@ -186,27 +186,27 @@ The recommended order is:
 
 # What concrete work items should be tracked?
 
-- [ ] Add version requirements to all internal path dependencies for publishable crates.
-- [ ] Ensure each publishable crate has complete and consistent package metadata.
-- [ ] Decide whether any workspace crates should be excluded from publication with `publish = false`.
-- [ ] Add `scripts/release.sh`.
-- [ ] Make `scripts/release.sh` fail fast on dirty worktrees, version mismatches, and missing required tools.
-- [ ] Make `scripts/release.sh` run explicit pre-release checks before publishing anything.
-- [ ] Make `scripts/release.sh` run `./scripts/check-code.sh` before publishing.
+- [x] Add version requirements to all internal path dependencies for publishable crates.
+- [x] Ensure each publishable crate has complete and consistent package metadata.
+- [x] Decide whether any workspace crates should be excluded from publication with `publish = false`.
+- [x] Add `scripts/release.sh`.
+- [x] Make `scripts/release.sh` fail fast on dirty worktrees, version mismatches, and missing required tools.
+- [x] Make `scripts/release.sh` run explicit pre-release checks before publishing anything.
+- [x] Make `scripts/release.sh` run `./scripts/check-code.sh` before publishing.
 - [ ] Make `scripts/release.sh` verify `cargo publish --dry-run` succeeds for each publishable crate before real publishing starts.
-- [ ] Make `scripts/release.sh` publish crates in explicit dependency order.
-- [ ] Make `scripts/release.sh` wait for each published crate version to become available before continuing.
-- [ ] Make `scripts/release.sh` create an annotated `v<version>` tag only after successful publication.
-- [ ] Make `scripts/release.sh` push the created tag.
-- [ ] Add a GitHub Actions workflow triggered by version tags.
-- [ ] Build the Linux release binary in that workflow.
-- [ ] Package the binary into a versioned archive.
-- [ ] Generate and upload a checksum file.
-- [ ] Create a GitHub Release and attach the release assets.
-- [ ] Document the release procedure, prerequisites, and rollback limits.
+- [x] Make `scripts/release.sh` publish crates in explicit dependency order.
+- [x] Make `scripts/release.sh` wait for each published crate version to become available before continuing.
+- [x] Make `scripts/release.sh` create an annotated `v<version>` tag only after successful publication.
+- [x] Make `scripts/release.sh` push the created tag.
+- [x] Add a GitHub Actions workflow triggered by version tags.
+- [x] Build the Linux release binary in that workflow.
+- [x] Package the binary into a versioned archive.
+- [x] Generate and upload a checksum file.
+- [x] Create a GitHub Release and attach the release assets.
+- [x] Document the release procedure, prerequisites, and rollback limits.
 - [ ] Verify the release script with `cargo publish --dry-run` for each publishable crate where possible.
 - [ ] Verify the tag workflow on a non-release tag pattern or temporary test repository before the first real release.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
 

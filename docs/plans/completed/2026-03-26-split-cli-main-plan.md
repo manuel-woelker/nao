@@ -105,15 +105,15 @@ Some concrete rules:
 
 # What concrete work items should be tracked?
 
-- [ ] Add focused CLI modules for dispatch, request validation, recipe initialization, version metadata, and help rendering.
-- [ ] Reduce [`main.rs`](/data/projects/nao/crates/cli/src/main.rs) to a thin entrypoint plus flag definition.
-- [ ] Preserve the existing CLI behavior for `--init`, `--version`, `--tui`, `--ci`, task execution, and help output.
-- [ ] Move validation tests out of the large `main.rs` test module and colocate them with the validation code.
-- [ ] Move init and starter-recipe tests next to the init module.
-- [ ] Move version formatting and normalization tests next to the version module.
-- [ ] Move help-rendering tests next to the help module.
-- [ ] Keep runner-related behavior in [`runner.rs`](/data/projects/nao/crates/cli/src/runner.rs) rather than expanding the new dispatch module.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Add focused CLI modules for dispatch, request validation, recipe initialization, version metadata, and help rendering.
+- [x] Reduce [`main.rs`](/data/projects/nao/crates/cli/src/main.rs) to a thin entrypoint plus flag definition.
+- [x] Preserve the existing CLI behavior for `--init`, `--version`, `--tui`, `--ci`, task execution, and help output.
+- [x] Move validation tests out of the large `main.rs` test module and colocate them with the validation code.
+- [x] Move init and starter-recipe tests next to the init module.
+- [x] Move version formatting and normalization tests next to the version module.
+- [x] Move help-rendering tests next to the help module.
+- [x] Keep runner-related behavior in [`runner.rs`](/data/projects/nao/crates/cli/src/runner.rs) rather than expanding the new dispatch module.
+- [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
 

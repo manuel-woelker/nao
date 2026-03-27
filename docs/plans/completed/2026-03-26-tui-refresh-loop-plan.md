@@ -146,16 +146,16 @@ If needed, `PalMock`-backed tests can count file reads or assert on which artifa
 
 # What concrete work items should be tracked?
 
-- [ ] Add a small refresh-tracking structure to `App` so reload decisions are based on explicit observed state.
+- [x] Add a small refresh-tracking structure to `App` so reload decisions are based on explicit observed state.
 - [ ] Refactor `refresh_active_run()` to report meaningful state changes instead of only mutating fields.
-- [ ] Remove `should_refresh_open_run_detail()` or reduce it to a narrow predicate that does not imply unconditional rereads.
-- [ ] Make open-run detail reloads conditional on real change signals.
-- [ ] Make selected task log reloads conditional on selection changes or likely log growth.
-- [ ] Preserve launcher failed-task output updates for active failed runs.
-- [ ] Add or update TUI tests that prove completed runs stay idle during repeated refresh ticks.
-- [ ] Add or update TUI tests that prove active runs still refresh when artifacts advance.
+- [x] Remove `should_refresh_open_run_detail()` or reduce it to a narrow predicate that does not imply unconditional rereads.
+- [x] Make open-run detail reloads conditional on real change signals.
+- [x] Make selected task log reloads conditional on selection changes or likely log growth.
+- [x] Preserve launcher failed-task output updates for active failed runs.
+- [x] Add or update TUI tests that prove completed runs stay idle during repeated refresh ticks.
+- [x] Add or update TUI tests that prove active runs still refresh when artifacts advance.
 - [ ] Add or update TUI tests that prove task selection still reloads the correct log.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Run `./scripts/check-code.sh`.
 
 # What assumptions should remain explicit?
 
