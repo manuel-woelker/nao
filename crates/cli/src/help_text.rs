@@ -44,7 +44,7 @@ Minimal example
 
 Recipe structure
   recipe "default" {{
-    config live-display="line-per-task" max-parallel-tasks=4
+    config live-display="line-per-task" failure-mode="fail-late" max-parallel-tasks=4
 
     task "build" description="Compile the project" {{
       run shell="cargo build --workspace"
@@ -94,12 +94,18 @@ Task child nodes
 Recipe config
   config live-display="single-line"
   config live-display="line-per-task"
+  config failure-mode="fail-early"
+  config failure-mode="fail-late"
   config max-parallel-tasks=4
 
   Supported config properties:
     live-display
       Choose how interactive progress is rendered.
       Valid values: `single-line`, `line-per-task`
+
+    failure-mode
+      Choose whether failures stop scheduling immediately or only block dependent tasks.
+      Valid values: `fail-early`, `fail-late`
 
     max-parallel-tasks
       Limit how many task processes may run at once.

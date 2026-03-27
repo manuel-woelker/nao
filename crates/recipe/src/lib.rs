@@ -1,6 +1,7 @@
 pub mod artifact_spec;
 pub mod dependency_name;
 pub mod environment_spec;
+pub mod failure_mode;
 pub mod live_display;
 pub mod parse_recipe;
 pub mod recipe;
@@ -13,6 +14,7 @@ pub mod task_name;
 pub use artifact_spec::ArtifactSpec;
 pub use dependency_name::DependencyName;
 pub use environment_spec::EnvironmentSpec;
+pub use failure_mode::FailureMode;
 pub use live_display::LiveDisplay;
 pub use parse_recipe::{load_recipe, load_recipe_with_pal, parse_recipe};
 pub use recipe::Recipe;

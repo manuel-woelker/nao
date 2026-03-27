@@ -21,7 +21,7 @@ use nao_base::shared_string::SharedString;
 use nao_base::timestamp::Timestamp;
 use nao_pal::pal::PalHandle;
 use nao_pal::process_output_stream::ProcessOutputStream;
-use nao_recipe::{Task, TaskName};
+use nao_recipe::{FailureMode, Task, TaskName};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::mpsc;
 use std::thread;
@@ -68,6 +68,9 @@ impl RunEngine {
                 let task_index = ready_queue.pop_front().with_context(|| {
                     "ready queue was empty while scheduling runnable tasks".to_owned()
                 })?;
+                if states[task_index] != TaskRunState::Ready {
+                    continue;
+                }
                 let task = plan.tasks[task_index].clone();
                 states[task_index] = TaskRunState::Running;
                 observer.on_task_started(task.name.as_str());
@@ -122,7 +125,21 @@ impl RunEngine {
                                 .saturating_sub(result.started_at.as_nanos()),
                             outcome_message.as_deref(),
                         );
-                        stop_launching = true;
+                        if plan.failure_mode == FailureMode::FailEarly {
+                            stop_launching = true;
+                        } else {
+                            SkipContext {
+                                plan,
+                                dependents: &dependents,
+                                states: &mut states,
+                                task_records: &mut task_records,
+                                task_events: &mut task_events,
+                                observer,
+                                pal: &*self.pal,
+                                writer,
+                            }
+                            .skip_dependents_after_failure(task_index)?;
+                        }
                         if failure_message.is_none() {
                             let task_failure = TaskFailure {
                                 task_name: task.name.0.clone(),
@@ -151,16 +168,15 @@ impl RunEngine {
                             outcome_message.as_deref(),
                         );
                         successful_task_count += 1;
-                        if !stop_launching {
-                            for dependent_index in &dependents[task_index] {
-                                remaining_prerequisites[*dependent_index] =
-                                    remaining_prerequisites[*dependent_index].saturating_sub(1);
-                                if remaining_prerequisites[*dependent_index] == 0
-                                    && states[*dependent_index] == TaskRunState::Pending
-                                {
-                                    states[*dependent_index] = TaskRunState::Ready;
-                                    ready_queue.push_back(*dependent_index);
-                                }
+                        for dependent_index in &dependents[task_index] {
+                            remaining_prerequisites[*dependent_index] =
+                                remaining_prerequisites[*dependent_index].saturating_sub(1);
+                            if !stop_launching
+                                && remaining_prerequisites[*dependent_index] == 0
+                                && states[*dependent_index] == TaskRunState::Pending
+                            {
+                                states[*dependent_index] = TaskRunState::Ready;
+                                ready_queue.push_back(*dependent_index);
                             }
                         }
                     }
@@ -192,7 +208,21 @@ impl RunEngine {
                     states[task_index] = TaskRunState::Failed;
                     let outcome_message = extract_task_outcome_message(&log_lines);
                     observer.on_task_failed(task.name.as_str(), 0, outcome_message.as_deref());
-                    stop_launching = true;
+                    if plan.failure_mode == FailureMode::FailEarly {
+                        stop_launching = true;
+                    } else {
+                        SkipContext {
+                            plan,
+                            dependents: &dependents,
+                            states: &mut states,
+                            task_records: &mut task_records,
+                            task_events: &mut task_events,
+                            observer,
+                            pal: &*self.pal,
+                            writer,
+                        }
+                        .skip_dependents_after_failure(task_index)?;
+                    }
                     let failed_at = self.pal.now();
                     if failure_message.is_none() {
                         failure_message = Some(render_task_execution_error_message(
@@ -326,6 +356,51 @@ fn skipped_task_record(task: &Task, skipped_at: Timestamp) -> TaskArtifactRecord
         exit_code: None,
         outcome_message: None,
         log_lines: Vec::new(),
+    }
+}
+
+struct SkipContext<'a> {
+    plan: &'a PlannedRun,
+    dependents: &'a [Vec<usize>],
+    states: &'a mut [TaskRunState],
+    task_records: &'a mut [Option<TaskArtifactRecord>],
+    task_events: &'a mut Vec<TaskEventRecord>,
+    observer: &'a mut dyn RunObserver,
+    pal: &'a dyn nao_pal::pal::Pal,
+    writer: &'a RunArtifactWriter,
+}
+
+impl SkipContext<'_> {
+    fn skip_dependents_after_failure(&mut self, failed_task_index: usize) -> NaoResult<()> {
+        let mut queue = VecDeque::from(self.dependents[failed_task_index].clone());
+
+        while let Some(task_index) = queue.pop_front() {
+            if self.task_records[task_index].is_some() {
+                continue;
+            }
+            match self.states[task_index] {
+                TaskRunState::Pending | TaskRunState::Ready => {
+                    self.states[task_index] = TaskRunState::Skipped;
+                    let task = &self.plan.tasks[task_index];
+                    self.observer.on_task_skipped(task.name.as_str());
+                    let skipped_at = self.pal.now();
+                    self.task_events.push(TaskEventRecord::Skipped {
+                        task_name: task.name.0.clone(),
+                        timestamp: skipped_at,
+                    });
+                    self.writer
+                        .append_task_skipped(task.name.as_str(), skipped_at)?;
+                    self.task_records[task_index] = Some(skipped_task_record(task, skipped_at));
+                    for dependent_index in &self.dependents[task_index] {
+                        queue.push_back(*dependent_index);
+                    }
+                }
+                TaskRunState::Skipped => {}
+                TaskRunState::Running | TaskRunState::Completed | TaskRunState::Failed => {}
+            }
+        }
+
+        Ok(())
     }
 }
 

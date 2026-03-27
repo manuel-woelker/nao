@@ -11,6 +11,6 @@ pub enum TaskRunState {
     Completed,
     /// The task failed.
     Failed,
-    /// The task never started because scheduling stopped after a failure.
+    /// The task never started because a prior failure made it ineligible to run.
     Skipped,
 }

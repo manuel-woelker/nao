@@ -18,6 +18,7 @@ use nao_pal::process_output_event::ProcessOutputEvent;
 use nao_pal::process_output_stream::ProcessOutputStream;
 use nao_pal::process_result::ProcessResult;
 use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
+use nao_recipe::FailureMode;
 use nao_recipe::LiveDisplay;
 use nao_recipe::RunSpec;
 use std::time::Duration;
@@ -223,6 +224,7 @@ planned=build,test"#
     ]
     .assert_eq(&rendered);
     assert_eq!(plan.live_display, LiveDisplay::LinePerTask);
+    assert_eq!(plan.failure_mode, FailureMode::FailEarly);
     assert_eq!(plan.max_parallel_tasks, 1);
 }
 
@@ -270,6 +272,29 @@ fn plans_requested_max_parallel_tasks() {
         .unwrap();
 
     assert_eq!(plan.max_parallel_tasks, 3);
+}
+
+#[test]
+fn plans_requested_failure_mode() {
+    let pal = PalMock::new();
+    pal.set_file(
+        "nao.kdl",
+        r#"
+            recipe "default" {
+              config failure-mode="fail-late"
+
+              task "test" {
+                run script="./scripts/test.sh"
+              }
+            }
+            "#,
+    );
+    let engine = RunEngine::new(PalHandle::new(pal));
+    let plan = engine
+        .plan_run(&FilePath::from("nao.kdl"), &["test".to_owned()])
+        .unwrap();
+
+    assert_eq!(plan.failure_mode, FailureMode::FailLate);
 }
 
 #[test]
@@ -1039,6 +1064,77 @@ fn stops_launching_new_tasks_after_concurrent_failure() {
         !events
             .lines()
             .any(|line| line.contains("\"task\":\"after-slow\"")
+                && line.contains("\"type\":\"task_started\""))
+    );
+}
+
+#[test]
+fn fail_late_continues_unrelated_tasks_and_skips_only_blocked_dependents() {
+    let pal = PalMock::new();
+    pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+    pal.set_file(
+        "nao.kdl",
+        r#"
+            recipe "default" {
+              config failure-mode="fail-late" max-parallel-tasks=2
+
+              task "lint" {
+                run script="./scripts/lint.sh"
+              }
+
+              task "build" {
+                run script="./scripts/build.sh"
+              }
+
+              task "test" {
+                depends-on "build"
+                run script="./scripts/test.sh"
+              }
+
+              task "package" {
+                depends-on "test"
+                run script="./scripts/package.sh"
+              }
+            }
+            "#,
+    );
+    set_script_process(&pal, "./scripts/lint.sh", &[b"lint ok\n"], 0);
+    set_script_process(&pal, "./scripts/build.sh", &[b"boom\n"], 1);
+    set_script_process(&pal, "./scripts/test.sh", &[b"should not run\n"], 0);
+    set_script_process(&pal, "./scripts/package.sh", &[b"should not run\n"], 0);
+    let engine = RunEngine::new(PalHandle::new(pal.clone()));
+
+    let result = engine
+        .execute_run(&FilePath::from("nao.kdl"), &["lint,package".to_owned()])
+        .unwrap();
+
+    assert!(matches!(result.status, RunStatus::Failed(_)));
+    let summary = pal
+        .read_file_string(".nao/runs/1970-01-01T00-00-00Z-lint+package/nao-summary.json")
+        .unwrap();
+    let events = pal
+        .read_file_string(".nao/runs/1970-01-01T00-00-00Z-lint+package/nao-events.jsonl")
+        .unwrap();
+
+    assert!(summary.contains("\"name\": \"lint\""));
+    assert!(summary.contains("\"status\": \"completed\""));
+    assert!(summary.contains("\"name\": \"build\""));
+    assert!(summary.contains("\"status\": \"failed\""));
+    assert!(summary.contains("\"name\": \"test\""));
+    assert!(summary.contains("\"status\": \"skipped\""));
+    assert!(summary.contains("\"name\": \"package\""));
+    assert!(summary.contains("\"status\": \"skipped\""));
+    assert!(
+        events.lines().any(|line| line.contains("\"task\":\"lint\"")
+            && line.contains("\"type\":\"task_finished\""))
+    );
+    assert!(!events.lines().any(
+        |line| line.contains("\"task\":\"test\"") && line.contains("\"type\":\"task_started\"")
+    ));
+    assert!(
+        !events
+            .lines()
+            .any(|line| line.contains("\"task\":\"package\"")
                 && line.contains("\"type\":\"task_started\""))
     );
 }

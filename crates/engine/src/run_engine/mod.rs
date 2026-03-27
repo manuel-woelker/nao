@@ -86,6 +86,7 @@ impl RunEngine {
         Ok(PlannedRun {
             requested_tasks,
             live_display: recipe.config.live_display,
+            failure_mode: recipe.config.failure_mode,
             max_parallel_tasks: recipe.config.max_parallel_tasks.unwrap_or(1),
             tasks,
         })

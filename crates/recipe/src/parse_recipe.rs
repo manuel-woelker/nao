@@ -1,6 +1,7 @@
 use crate::artifact_spec::ArtifactSpec;
 use crate::dependency_name::DependencyName;
 use crate::environment_spec::EnvironmentSpec;
+use crate::failure_mode::FailureMode;
 use crate::live_display::LiveDisplay;
 use crate::recipe::Recipe;
 use crate::recipe_config::RecipeConfig;
@@ -179,7 +180,10 @@ fn parse_recipe_config(source: &str, node: &KdlNode) -> Result<RecipeConfig, Rec
             ));
         };
 
-        if name.value() != "live-display" && name.value() != "max-parallel-tasks" {
+        if name.value() != "live-display"
+            && name.value() != "failure-mode"
+            && name.value() != "max-parallel-tasks"
+        {
             return Err(recipe_error_for_entry(
                 source,
                 entry,
@@ -197,6 +201,18 @@ fn parse_recipe_config(source: &str, node: &KdlNode) -> Result<RecipeConfig, Rec
                 format!(
                     "config live-display must be one of `single-line` or `line-per-task`, found `{}`",
                     live_display.as_str()
+                ),
+            )
+        })?;
+    }
+    if let Some(failure_mode) = parse_optional_string_property(source, node, "failure-mode")? {
+        config.failure_mode = FailureMode::parse(failure_mode.as_str()).ok_or_else(|| {
+            recipe_error_for_node(
+                source,
+                node,
+                format!(
+                    "config failure-mode must be one of `fail-early` or `fail-late`, found `{}`",
+                    failure_mode.as_str()
                 ),
             )
         })?;
@@ -651,7 +667,7 @@ fn render_source_span(source: &str, span: SourceSpan) -> String {
 mod tests {
     use crate::parse_recipe::{load_recipe_with_pal, parse_recipe, render_kdl_parse_error};
     use crate::run_spec::RunSpec;
-    use crate::{LiveDisplay, RecipeConfig};
+    use crate::{FailureMode, LiveDisplay, RecipeConfig};
     use expect_test::expect;
     use kdl::{KdlDiagnostic, KdlError};
     use miette::{Severity, SourceSpan};
@@ -775,6 +791,22 @@ mod tests {
     }
 
     #[test]
+    fn defaults_recipe_failure_mode_to_fail_early() {
+        let recipe = parse_recipe(
+            r#"
+            recipe "default" {
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(recipe.config.failure_mode, FailureMode::FailEarly);
+    }
+
+    #[test]
     fn parses_recipe_live_display_config() {
         let recipe = parse_recipe(
             r#"
@@ -790,6 +822,24 @@ mod tests {
         .unwrap();
 
         assert_eq!(recipe.config.live_display, LiveDisplay::SingleLine);
+    }
+
+    #[test]
+    fn parses_recipe_failure_mode_config() {
+        let recipe = parse_recipe(
+            r#"
+            recipe "default" {
+              config failure-mode="fail-late"
+
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(recipe.config.failure_mode, FailureMode::FailLate);
     }
 
     #[test]
@@ -887,6 +937,26 @@ mod tests {
 
         assert!(error.to_test_string().contains(
             "config live-display must be one of `single-line` or `line-per-task`, found `sideways`"
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_recipe_failure_mode_config() {
+        let error = parse_recipe(
+            r#"
+            recipe "default" {
+              config failure-mode="eventually"
+
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_test_string().contains(
+            "config failure-mode must be one of `fail-early` or `fail-late`, found `eventually`"
         ));
     }
 
