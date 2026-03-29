@@ -5,29 +5,31 @@ on:
     tags:
       - "v*"
 
-env:
-  MANYLINUX_IMAGE: quay.io/pypa/manylinux2014_x86_64:2024-08-03-32dfa47
-  MANYLINUX_CARGO_HOME: /workspace/.cargo-ci
-  MANYLINUX_RUSTUP_HOME: /workspace/.rustup-ci
-
 permissions:
   contents: write
 
 jobs:
   build-release:
     runs-on: ubuntu-latest
+    container:
+      image: quay.io/pypa/manylinux2014_x86_64:2024-08-03-32dfa47
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          yum install -y curl
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
         uses: actions/cache@v5
         with:
           path: |
-            .cargo-ci/bin
-            .cargo-ci/git
-            .cargo-ci/registry
-            .rustup-ci
+            ~/.cargo/registry
+            ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
@@ -35,28 +37,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build release binary
-        run: |
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            -e HOME=/workspace/.ci-home \
-            -e CARGO_HOME="${MANYLINUX_CARGO_HOME}" \
-            -e RUSTUP_HOME="${MANYLINUX_RUSTUP_HOME}" \
-            -v "${GITHUB_WORKSPACE}:/workspace" \
-            -w /workspace \
-            "${MANYLINUX_IMAGE}" \
-            bash -lc '
-              set -euo pipefail
-              python3 - <<'"'"'PY'"'"'
-              import urllib.request
-              with urllib.request.urlopen("https://sh.rustup.rs") as response:
-                  data = response.read()
-              with open("/tmp/rustup-init.sh", "wb") as file:
-                  file.write(data)
-              PY
-              sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable
-              source "${CARGO_HOME}/env"
-              cargo build --release -p nao --locked
-            '
+        run: cargo build --release -p nao --locked
 
       - name: Package release artifacts
         env:
