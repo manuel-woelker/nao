@@ -5,48 +5,56 @@ on:
     branches: ["main"]
   pull_request:
 
+env:
+  MANYLINUX_IMAGE: quay.io/pypa/manylinux2014_x86_64:2024-08-03-32dfa47
+  MANYLINUX_CARGO_HOME: /workspace/.cargo-ci
+  MANYLINUX_RUSTUP_HOME: /workspace/.rustup-ci
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    container:
-      image: quay.io/pypa/manylinux2014_x86_64:2024-08-03-32dfa47
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Install build dependencies
-        run: |
-          yum install -y curl
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Cache cargo
         uses: actions/cache@v5
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            .cargo-ci/bin
+            .cargo-ci/git
+            .cargo-ci/registry
+            .rustup-ci
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-
-      - name: Format check
-        run: cargo fmt -- --check
-
-      - name: Build
-        run: cargo build --all-targets
-
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Tests
-        run: cargo nextest run
+      - name: Build and test in pinned manylinux container
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/workspace/.ci-home \
+            -e CARGO_HOME="${MANYLINUX_CARGO_HOME}" \
+            -e RUSTUP_HOME="${MANYLINUX_RUSTUP_HOME}" \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            "${MANYLINUX_IMAGE}" \
+            bash -lc '
+              set -euo pipefail
+              python3 - <<'"'"'PY'"'"'
+              import urllib.request
+              with urllib.request.urlopen("https://sh.rustup.rs") as response:
+                  data = response.read()
+              with open("/tmp/rustup-init.sh", "wb") as file:
+                  file.write(data)
+              PY
+              sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable
+              source "${CARGO_HOME}/env"
+              rustup component add rustfmt clippy
+              cargo install cargo-nextest --locked
+              cargo fmt -- --check
+              cargo build --all-targets
+              cargo clippy --all-targets --all-features -- -D warnings
+              cargo nextest run
+            '
