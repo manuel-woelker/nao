@@ -23,6 +23,31 @@ Compose-backed tasks execute as generated `docker compose` commands and are inte
 See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for the higher-level project overview.
 See [`docs/RELEASE.md`](docs/RELEASE.md) for the release process.
 
+## How can I build a portable Linux binary?
+
+Release artifacts are built as statically linked `x86_64-unknown-linux-musl` binaries so they run on a wider range of Linux distributions.
+
+Install the Rust target:
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+```
+
+On Debian or Ubuntu, install the `musl` linker:
+
+```bash
+sudo apt-get update
+sudo apt-get install --yes musl-tools
+```
+
+Then build:
+
+```bash
+cargo build --release --target x86_64-unknown-linux-musl -p nao --locked
+```
+
+The binary will be at `target/x86_64-unknown-linux-musl/release/nao`.
+
 ## How can I use the TUI?
 
 `nao` includes a full-screen terminal UI behind the `--tui` flag.

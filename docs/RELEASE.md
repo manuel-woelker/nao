@@ -15,6 +15,7 @@ The current release process uses:
 - one shared version across all published crates
 - a `v<version>` git tag such as `v0.1.0`
 - Linux-only release artifacts for the first version
+- statically linked `x86_64-unknown-linux-musl` binaries for better portability across Linux distributions
 
 # What must be true before running the release script?
 
@@ -121,11 +122,42 @@ If that order changes, update both the manifests and the release script together
 When a `v<version>` tag is pushed, GitHub Actions:
 
 1. checks out the tagged revision
-2. builds the `nao` release binary on Linux
-3. packages the binary and `README.md` into a tarball
-4. generates a SHA-256 checksum
-5. creates or updates the GitHub Release
-6. uploads the tarball and checksum as release assets
+2. installs the `x86_64-unknown-linux-musl` Rust target and `musl-tools`
+3. builds the `nao` release binary for `x86_64-unknown-linux-musl`
+4. packages the binary and `README.md` into a tarball
+5. generates a SHA-256 checksum
+6. creates or updates the GitHub Release
+7. uploads the tarball and checksum as release assets
+
+The published Linux binary is statically linked through `musl`.
+That makes the release artifact more portable across distributions because it does not depend on the target machine's glibc version.
+
+# How can a portable Linux binary be built locally?
+
+Install the Rust target first:
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+```
+
+On Debian or Ubuntu, install the `musl` linker with:
+
+```bash
+sudo apt-get update
+sudo apt-get install --yes musl-tools
+```
+
+Then build the CLI with:
+
+```bash
+cargo build --release --target x86_64-unknown-linux-musl -p nao --locked
+```
+
+The resulting binary is written to:
+
+```bash
+target/x86_64-unknown-linux-musl/release/nao
+```
 
 # What should be done if a release fails halfway through?
 
