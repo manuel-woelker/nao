@@ -1,6 +1,6 @@
 [package]
 name = "nao"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 build = "build.rs"
 description = "CLI for the nao task runner"
@@ -8,11 +8,11 @@ license = "MIT"
 repository = "https://github.com/manuel-woelker/nao"
 
 [dependencies]
-nao-base = { path = "../base", version = "0.1.4" }
-nao-engine = { path = "../engine", version = "0.1.4" }
-nao-pal = { path = "../pal", version = "0.1.4" }
-nao-recipe = { path = "../recipe", version = "0.1.4" }
-nao-tui = { path = "../tui", version = "0.1.4" }
+nao-base = { path = "../base", version = "0.1.5" }
+nao-engine = { path = "../engine", version = "0.1.5" }
+nao-pal = { path = "../pal", version = "0.1.5" }
+nao-recipe = { path = "../recipe", version = "0.1.5" }
+nao-tui = { path = "../tui", version = "0.1.5" }
 shadow-rs = { workspace = true }
 xflags = { workspace = true }
 
