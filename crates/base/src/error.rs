@@ -249,9 +249,7 @@ fn write_span_trace(
             return false;
         }
 
-        if let Some((file, line)) = metadata
-            .file()
-            .and_then(|file| metadata.line().map(|line| (file, line)))
+        if let Some((file, line)) = metadata.file().zip(metadata.line())
             && writeln!(write, "{}       at {}:{}", prefix, file, line).is_err()
         {
             result = Err(std::fmt::Error);
