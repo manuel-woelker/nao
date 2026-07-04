@@ -46,24 +46,33 @@ impl LinePerTaskDisplay {
                 + 1;
             let mut frame_index = 0usize;
             let mut first_render = true;
+            let mut previous_snapshot = None;
 
             loop {
-                let rendered = {
+                let snapshot = {
                     let snapshot = lock_mutex(
                         &thread_snapshot,
                         "failed to lock line-per-task display snapshot",
                     )?;
-                    render_line_per_task_display(snapshot.clone(), FRAMES[frame_index])
+                    snapshot.clone()
                 };
 
                 if first_render {
+                    let rendered =
+                        render_line_per_task_display(snapshot.clone(), FRAMES[frame_index]);
                     write_stdout(&rendered)
                         .context("failed to write initial line-per-task display frame")?;
                     first_render = false;
-                } else {
+                } else if previous_snapshot.as_ref() != Some(&snapshot) {
+                    let rendered =
+                        render_line_per_task_display(snapshot.clone(), FRAMES[frame_index]);
                     write_stdout(&format!("\x1b[{line_count}F\x1b[J{rendered}"))
-                        .context("failed to write line-per-task display frame")?;
+                        .context("failed to write changed line-per-task display frame")?;
+                } else {
+                    write_stdout(&render_spinner_updates(&snapshot, FRAMES[frame_index]))
+                        .context("failed to write line-per-task spinner frame")?;
                 }
+                previous_snapshot = Some(snapshot);
 
                 if thread_stop.load(Ordering::Relaxed) {
                     break;
@@ -163,6 +172,21 @@ impl LinePerTaskDisplay {
     }
 }
 
+fn render_spinner_updates(snapshot: &LiveTaskSnapshot, running_symbol: &str) -> String {
+    let mut output = String::new();
+    for (task_index, task) in snapshot.tasks.iter().enumerate() {
+        if task.status != LiveTaskStatus::Running {
+            continue;
+        }
+        let lines_up = snapshot.tasks.len() - task_index;
+        let _ = std::fmt::Write::write_fmt(
+            &mut output,
+            format_args!("\x1b[s\x1b[{lines_up}A\r\x1b[2C{running_symbol}\x1b[u"),
+        );
+    }
+    output
+}
+
 impl RunObserver for LinePerTaskDisplay {
     fn on_task_started(&mut self, task_name: &str) {
         self.update_task(task_name, LiveTaskStatus::Running);
@@ -233,6 +257,7 @@ impl Drop for LinePerTaskDisplay {
 
 #[cfg(test)]
 mod tests {
+    use super::render_spinner_updates;
     use crate::runner::live_display::shared::LiveTaskSnapshot;
     use crate::runner::live_display::shared::LiveTaskState;
     use crate::runner::live_display::shared::LiveTaskStatus;
@@ -295,5 +320,40 @@ mod tests {
               ❌ cleanup  12.346s  3 files uploaded
         "#]]
         .assert_eq(&nao_base::unansi(&rendered));
+    }
+
+    #[test]
+    fn updates_only_running_task_spinner_cells() {
+        let snapshot = LiveTaskSnapshot {
+            header: "Running tasks".to_owned(),
+            tasks: vec![
+                LiveTaskState {
+                    name: SharedString::from("build"),
+                    status: LiveTaskStatus::Completed,
+                    elapsed_nanos: Some(1),
+                    status_message: None,
+                    outcome_message: None,
+                },
+                LiveTaskState {
+                    name: SharedString::from("test"),
+                    status: LiveTaskStatus::Running,
+                    elapsed_nanos: None,
+                    status_message: None,
+                    outcome_message: None,
+                },
+                LiveTaskState {
+                    name: SharedString::from("lint"),
+                    status: LiveTaskStatus::Running,
+                    elapsed_nanos: None,
+                    status_message: None,
+                    outcome_message: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            render_spinner_updates(&snapshot, "⠙"),
+            "\x1b[s\x1b[2A\r\x1b[2C⠙\x1b[u\x1b[s\x1b[1A\r\x1b[2C⠙\x1b[u"
+        );
     }
 }
