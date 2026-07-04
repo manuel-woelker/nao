@@ -145,6 +145,7 @@ impl SingleLineDisplay {
         };
         task.status = status;
         task.elapsed_nanos = elapsed_nanos;
+        task.status_message = None;
         task.outcome_message = outcome_message.map(SharedString::from);
     }
 }
@@ -152,6 +153,30 @@ impl SingleLineDisplay {
 impl RunObserver for SingleLineDisplay {
     fn on_task_started(&mut self, task_name: &str) {
         self.update_task(task_name, LiveTaskStatus::Running);
+    }
+
+    fn on_task_status(&mut self, task_name: &str, status_message: &str) {
+        let mut snapshot = match lock_mutex(
+            &self.snapshot,
+            "failed to lock single-line display snapshot",
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                store_async_error(
+                    &self.update_error,
+                    error,
+                    "failed to persist single-line display update error",
+                );
+                return;
+            }
+        };
+        if let Some(task) = snapshot
+            .tasks
+            .iter_mut()
+            .find(|task| task.name.as_str() == task_name)
+        {
+            task.status_message = Some(SharedString::from(status_message));
+        }
     }
 
     fn on_task_completed(
@@ -211,30 +236,34 @@ mod tests {
                     name: SharedString::from("build"),
                     status: LiveTaskStatus::Completed,
                     elapsed_nanos: Some(4_000_000),
+                    status_message: None,
                     outcome_message: None,
                 },
                 LiveTaskState {
                     name: SharedString::from("lint"),
                     status: LiveTaskStatus::Running,
                     elapsed_nanos: None,
+                    status_message: Some(SharedString::from("2/5")),
                     outcome_message: None,
                 },
                 LiveTaskState {
                     name: SharedString::from("test"),
                     status: LiveTaskStatus::Running,
                     elapsed_nanos: None,
+                    status_message: None,
                     outcome_message: None,
                 },
                 LiveTaskState {
                     name: SharedString::from("publish"),
                     status: LiveTaskStatus::Pending,
                     elapsed_nanos: None,
+                    status_message: None,
                     outcome_message: None,
                 },
             ],
         });
 
-        expect!["Running test and 2 prerequisite tasks (running: 2, completed: 1, remaining: 1)"]
+        expect!["Running test and 2 prerequisite tasks (running: 2, completed: 1, remaining: 1) — lint: 2/5"]
             .assert_eq(&nao_base::unansi(&rendered));
     }
 }

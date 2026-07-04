@@ -36,6 +36,8 @@ pub struct RunTaskRecord {
     pub exit_code: Option<i32>,
     /// Final reported task outcome when available.
     pub outcome_message: Option<SharedString>,
+    /// Latest status reported while the task is running.
+    pub status_message: Option<SharedString>,
     /// Task duration in nanoseconds when known.
     pub duration_nanos: Option<u128>,
     /// Task log path relative to the run directory.
@@ -59,6 +61,8 @@ pub struct RunEventRecord {
     pub exit_code: Option<i32>,
     /// Final reported task outcome when applicable.
     pub outcome_message: Option<SharedString>,
+    /// Status message when applicable.
+    pub status_message: Option<SharedString>,
     /// Task duration in nanoseconds when applicable.
     pub duration_nanos: Option<u128>,
 }
@@ -135,6 +139,8 @@ struct EventFile {
     exit_code: Option<i32>,
     #[serde(default)]
     outcome_message: Option<SharedString>,
+    #[serde(default)]
+    status_message: Option<SharedString>,
     #[serde(default)]
     duration_nanos: Option<SharedString>,
     #[serde(default, rename = "requested_tasks")]
@@ -280,6 +286,7 @@ fn build_task_records(
                 result: task.result.clone(),
                 exit_code: task.exit_code,
                 outcome_message: task.outcome_message.clone(),
+                status_message: None,
                 duration_nanos: task
                     .duration_nanos
                     .as_ref()
@@ -299,6 +306,7 @@ fn build_task_records(
                     result: SharedString::from("pending"),
                     exit_code: None,
                     outcome_message: None,
+                    status_message: None,
                     duration_nanos: None,
                     log_file: FilePath::from(format!(
                         "{}.log",
@@ -328,6 +336,7 @@ fn build_task_records(
                 result: SharedString::from("pending"),
                 exit_code: None,
                 outcome_message: None,
+                status_message: None,
                 duration_nanos: None,
                 log_file: FilePath::from(format!("{}.log", sanitize_task_name(task_name.as_str()))),
             });
@@ -348,11 +357,15 @@ fn build_task_records(
                 task.result = event.result.clone().unwrap_or_else(|| task.status.clone());
                 task.exit_code = event.exit_code;
                 task.outcome_message = event.outcome_message.clone();
+                task.status_message = None;
                 task.duration_nanos = event.duration_nanos;
             }
             "task_skipped" => {
                 task.status = SharedString::from("skipped");
                 task.result = SharedString::from("skipped");
+            }
+            "task_status" => {
+                task.status_message = event.status_message.clone();
             }
             _ => {}
         }
@@ -405,6 +418,7 @@ fn read_events_file(pal: &dyn Pal, run_directory: &FilePath) -> NaoResult<Vec<Ru
                 result: event.result,
                 exit_code: event.exit_code,
                 outcome_message: event.outcome_message,
+                status_message: event.status_message,
                 duration_nanos: event
                     .duration_nanos
                     .as_ref()
@@ -561,6 +575,31 @@ test pending"#
         ]
         .assert_eq(&rendered);
         assert_eq!(detail.result, "running");
+    }
+
+    #[test]
+    fn loads_latest_status_for_running_task() {
+        let pal = PalMock::new();
+        pal.set_file(
+            ".nao/runs/2026-03-19T12-00-00Z-counter/nao-plan.json",
+            r#"{"requested_tasks":["counter"],"tasks":[{"name":"counter"}]}"#,
+        );
+        pal.set_file(
+            ".nao/runs/2026-03-19T12-00-00Z-counter/nao-events.jsonl",
+            concat!(
+                "{\"type\":\"task_started\",\"timestamp\":\"2026-03-19T12:00:00Z\",\"task\":\"counter\"}\n",
+                "{\"type\":\"task_status\",\"timestamp\":\"2026-03-19T12:00:01Z\",\"task\":\"counter\",\"status_message\":\"count 1/5\"}\n",
+                "{\"type\":\"task_status\",\"timestamp\":\"2026-03-19T12:00:02Z\",\"task\":\"counter\",\"status_message\":\"count 2/5\"}\n",
+            ),
+        );
+
+        let detail = load_run_detail(
+            &pal,
+            &FilePath::from(".nao/runs/2026-03-19T12-00-00Z-counter"),
+        )
+        .unwrap();
+
+        assert_eq!(detail.tasks[0].status_message.as_deref(), Some("count 2/5"));
     }
 
     #[test]

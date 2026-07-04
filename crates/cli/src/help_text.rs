@@ -126,6 +126,12 @@ Task outcomes
   If multiple outcome lines are produced, the last one wins.
   The outcome line remains in logs and is also persisted for the CLI and TUI.
 
+Task status
+  Running tasks may update their current status by printing a line beginning
+  with `Task status: `. The latest status is displayed by the CLI and TUI.
+
+    printf 'Task status: processed 12/30 files\n'
+
 Authoring rules
   Use exactly one top-level `recipe` node.
   Put tasks inside the recipe node.

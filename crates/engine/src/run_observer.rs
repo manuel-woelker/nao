@@ -3,6 +3,9 @@ pub trait RunObserver {
     /// Called when a task begins execution.
     fn on_task_started(&mut self, _task_name: &str) {}
 
+    /// Called when a running task reports a new status message.
+    fn on_task_status(&mut self, _task_name: &str, _status_message: &str) {}
+
     /// Called when a task exits successfully.
     fn on_task_completed(
         &mut self,

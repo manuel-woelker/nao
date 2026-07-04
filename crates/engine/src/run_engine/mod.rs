@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
 const TASK_OUTCOME_PREFIX: &str = "Task outcome: ";
+pub(crate) const TASK_STATUS_PREFIX: &str = "Task status: ";
 
 /// Loads recipes, plans runs, and executes tasks.
 pub struct RunEngine {
@@ -40,7 +41,18 @@ type TaskRunArtifacts = (
     RunStatus,
     Option<String>,
 );
-type TaskExecutionMessage = (usize, SharedString, TaskLogLines, TaskExecutionResult);
+pub(crate) enum TaskExecutionMessage {
+    Status {
+        task_index: usize,
+        message: SharedString,
+    },
+    Finished {
+        task_index: usize,
+        output: SharedString,
+        log_lines: TaskLogLines,
+        result: TaskExecutionResult,
+    },
+}
 
 impl RunEngine {
     /// Creates a new run engine for the provided platform abstraction.

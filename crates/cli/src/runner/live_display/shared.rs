@@ -20,6 +20,7 @@ pub(super) struct LiveTaskState {
     pub(super) name: SharedString,
     pub(super) status: LiveTaskStatus,
     pub(super) elapsed_nanos: Option<u128>,
+    pub(super) status_message: Option<SharedString>,
     pub(super) outcome_message: Option<SharedString>,
 }
 
@@ -45,6 +46,7 @@ pub(super) fn new_snapshot(header: String, tasks: &[Task]) -> LiveTaskSnapshot {
                 name: task.name.0.clone(),
                 status: LiveTaskStatus::Pending,
                 elapsed_nanos: None,
+                status_message: None,
                 outcome_message: None,
             })
             .collect(),
@@ -104,32 +106,27 @@ pub(super) fn render_line_per_task_display(
         .map(|duration| duration.len())
         .max()
         .unwrap_or(0);
-    let outcome_width = snapshot
-        .tasks
-        .iter()
-        .filter_map(|task| task.outcome_message.as_ref())
-        .map(|outcome| outcome.as_str().len())
-        .max()
-        .unwrap_or(0);
-
     for task in &snapshot.tasks {
         let task_name = format!("{:<task_name_width$}", task.name.as_str());
         let duration = task
             .elapsed_nanos
             .map(format_live_task_runtime_seconds)
             .or_else(|| (task.status == LiveTaskStatus::Running).then(|| "running".to_owned()));
-        let outcome = task.outcome_message.as_ref().map(|value| value.as_str());
+        let outcome = task
+            .outcome_message
+            .as_ref()
+            .or(task.status_message.as_ref())
+            .map(|value| value.as_str());
 
         match (duration, outcome) {
             (Some(duration), Some(outcome)) => {
                 let _ = std::fmt::Write::write_fmt(
                     &mut output,
                     format_args!(
-                        "  {} {}  {:>duration_width$}  {:<outcome_width$}\n",
+                        "  {} {}  {:>duration_width$}  {outcome}\n",
                         render_live_task_status(task.status, running_symbol),
                         task_name,
                         duration,
-                        outcome,
                     ),
                 );
             }
@@ -148,11 +145,10 @@ pub(super) fn render_line_per_task_display(
                 let _ = std::fmt::Write::write_fmt(
                     &mut output,
                     format_args!(
-                        "  {} {}  {:duration_width$}  {:<outcome_width$}\n",
+                        "  {} {}  {:duration_width$}  {outcome}\n",
                         render_live_task_status(task.status, running_symbol),
                         task_name,
                         "",
-                        outcome,
                     ),
                 );
             }
@@ -189,9 +185,24 @@ pub(super) fn render_single_line_display(snapshot: LiveTaskSnapshot) -> String {
         .filter(|task| matches!(task.status, LiveTaskStatus::Pending))
         .count();
 
+    let statuses = snapshot
+        .tasks
+        .iter()
+        .filter_map(|task| {
+            task.status_message
+                .as_ref()
+                .map(|message| format!("{}: {}", task.name.as_str(), message.as_str()))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let status_suffix = if statuses.is_empty() {
+        String::new()
+    } else {
+        format!(" — {statuses}")
+    };
     format!(
-        "{} (running: {running}, completed: {completed}, remaining: {remaining})",
-        snapshot.header
+        "{} (running: {running}, completed: {completed}, remaining: {remaining}){status_suffix}",
+        snapshot.header,
     )
 }
 

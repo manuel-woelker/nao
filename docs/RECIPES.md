@@ -201,6 +201,17 @@ printf 'Task outcome: 30 tests succeeded\n'
 
 The outcome line remains in the task log and is also stored in structured run artifacts for the CLI and TUI.
 
+# How can a running task report its current status?
+
+Tasks may update their live status by printing a line that begins with `Task status: `.
+Each new status replaces the previous one in the CLI and TUI while the task runs.
+
+```sh
+printf 'Task status: processed 12/30 files\n'
+```
+
+Status lines remain in the task log and are appended to `nao-events.jsonl` as `task_status` events.
+
 # What parts of the format are still open?
 
 The broad shape is clear, but several details are still work in progress, including:

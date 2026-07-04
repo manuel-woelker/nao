@@ -5,6 +5,7 @@ use super::process_command::build_bash_shell_script;
 use super::process_command::build_process_command;
 use crate::run_execution_result::RunStatus;
 use crate::run_execution_result::TaskFailure;
+use crate::run_observer::RunObserver;
 use expect_test::expect;
 use nao_base::file_path::FilePath;
 use nao_base::shared_string::SharedString;
@@ -1267,6 +1268,58 @@ fn captures_outcome_from_direct_output_and_keeps_marker_in_logs() {
     assert!(summary.contains("\"outcome_message\": \"30 tests succeeded\""));
     assert!(events.contains("\"outcome_message\":\"30 tests succeeded\""));
     assert!(log.contains("Task outcome: 30 tests succeeded"));
+}
+
+#[test]
+fn streams_task_status_to_observer_and_events() {
+    #[derive(Default)]
+    struct StatusObserver(Vec<(String, String)>);
+
+    impl RunObserver for StatusObserver {
+        fn on_task_status(&mut self, task_name: &str, status_message: &str) {
+            self.0
+                .push((task_name.to_owned(), status_message.to_owned()));
+        }
+    }
+
+    let pal = PalMock::new();
+    pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+    pal.set_file(
+        "nao.kdl",
+        r#"
+            recipe "default" {
+              task "counter" { run script="./scripts/counter.sh" }
+            }
+            "#,
+    );
+    set_script_process(
+        &pal,
+        "./scripts/counter.sh",
+        &[b"Task status: count 1/2\n", b"Task status: count 2/2\n"],
+        0,
+    );
+    let engine = RunEngine::new(PalHandle::new(pal.clone()));
+    let plan = engine
+        .plan_run(&FilePath::from("nao.kdl"), &["counter".to_owned()])
+        .unwrap();
+    let mut observer = StatusObserver::default();
+
+    engine
+        .execute_planned_run_with_observer(&FilePath::from("nao.kdl"), &plan, &mut observer)
+        .unwrap();
+
+    assert_eq!(
+        observer.0,
+        vec![
+            ("counter".to_owned(), "count 1/2".to_owned()),
+            ("counter".to_owned(), "count 2/2".to_owned()),
+        ]
+    );
+    let events = pal
+        .read_file_string(".nao/runs/1970-01-01T00-00-00Z-counter/nao-events.jsonl")
+        .unwrap();
+    assert!(events.contains("\"type\":\"task_status\""));
+    assert!(events.contains("\"status_message\":\"count 2/2\""));
 }
 
 #[test]

@@ -155,6 +155,16 @@ recipe "default" {
     """
   }
 
+  task "counter" description="Report a counter once per second" {
+    run shell="""
+      for count in 1 2 3 4 5; do
+        printf 'Task status: count %s/5\n' "$count"
+        sleep 1
+      done
+      printf 'Task outcome: counted to 5\n'
+    """
+  }
+
   task "slow2" description="Sleep for 2 seconds" {
     run shell="""
       sleep 2

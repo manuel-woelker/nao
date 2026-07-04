@@ -143,6 +143,25 @@ impl RunArtifactWriter {
         }))
     }
 
+    /// Appends a status reported by a running task.
+    pub fn append_task_status(
+        &self,
+        task_name: &str,
+        timestamp: Timestamp,
+        status_message: &str,
+    ) -> NaoResult<()> {
+        self.append_event_json(&json!({
+            "type": "task_status",
+            "timestamp": format_iso8601(absolute_system_time(
+                self.run_started_system_time,
+                self.run_started_at,
+                timestamp,
+            )),
+            "task": task_name,
+            "status_message": status_message,
+        }))
+    }
+
     /// Appends a task finish event.
     pub fn append_task_finished(&self, task_record: &TaskArtifactRecord) -> NaoResult<()> {
         let timestamp = task_record.finished_at.unwrap_or(self.run_started_at);

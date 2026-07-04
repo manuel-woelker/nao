@@ -185,6 +185,8 @@ impl App {
                 }
                 if let Some(outcome_message) = &task.outcome_message {
                     row.push_str(&format!("  {}", outcome_message.as_str()));
+                } else if let Some(status_message) = &task.status_message {
+                    row.push_str(&format!("  {}", status_message.as_str()));
                 }
                 Line::from(row)
             }));

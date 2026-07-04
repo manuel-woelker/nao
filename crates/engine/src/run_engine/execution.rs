@@ -86,10 +86,21 @@ impl RunEngine {
                 let worker_writer = writer.clone();
                 let task_name = task.name.0.clone();
                 join_handles.push(thread::spawn(move || {
-                    let (task_output, log_lines, execution_result) =
-                        execute_task(pal, worker_recipe_path, task, worker_writer);
+                    let (task_output, log_lines, execution_result, worker_sender) = execute_task(
+                        pal,
+                        worker_recipe_path,
+                        task,
+                        worker_writer,
+                        task_index,
+                        worker_sender,
+                    );
                     worker_sender
-                        .send((task_index, task_output, log_lines, execution_result))
+                        .send(TaskExecutionMessage::Finished {
+                            task_index,
+                            output: task_output,
+                            log_lines,
+                            result: execution_result,
+                        })
                         .with_context(|| {
                             format!(
                                 "failed to send execution result for task `{}`",
@@ -104,9 +115,28 @@ impl RunEngine {
                 break;
             }
 
-            let (task_index, task_output, log_lines, execution_result) = receiver
-                .recv()
-                .context("failed to receive task execution result from worker thread")?;
+            let (task_index, task_output, log_lines, execution_result) = loop {
+                match receiver
+                    .recv()
+                    .context("failed to receive task execution update from worker thread")?
+                {
+                    TaskExecutionMessage::Status {
+                        task_index,
+                        message,
+                    } => {
+                        observer
+                            .on_task_status(plan.tasks[task_index].name.as_str(), message.as_str());
+                    }
+                    TaskExecutionMessage::Finished {
+                        task_index,
+                        output,
+                        log_lines,
+                        result,
+                    } => {
+                        break (task_index, output, log_lines, result);
+                    }
+                }
+            };
             running_count = running_count.saturating_sub(1);
             output_by_task[task_index] = task_output;
             let task = &plan.tasks[task_index];
@@ -317,8 +347,15 @@ fn execute_task(
     recipe_path: FilePath,
     task: Task,
     writer: RunArtifactWriter,
-) -> (SharedString, TaskLogLines, TaskExecutionResult) {
-    let mut framer = LiveTaskArtifactSink::new(writer, task.name.0.clone());
+    task_index: usize,
+    sender: mpsc::Sender<TaskExecutionMessage>,
+) -> (
+    SharedString,
+    TaskLogLines,
+    TaskExecutionResult,
+    mpsc::Sender<TaskExecutionMessage>,
+) {
+    let mut framer = LiveTaskArtifactSink::new(writer, task.name.0.clone(), task_index, sender);
 
     let execution_result =
         match crate::run_engine::process_command::build_process_command(&recipe_path, &task) {
@@ -327,9 +364,9 @@ fn execute_task(
                 .map_err(|error| SharedString::from(error.to_test_string().as_str())),
             Err(error) => Err(SharedString::from(error.to_test_string().as_str())),
         };
-    let (task_output, log_lines) = framer.into_parts();
+    let (task_output, log_lines, sender) = framer.into_parts();
 
-    (task_output, log_lines, execution_result)
+    (task_output, log_lines, execution_result, sender)
 }
 
 fn append_task_output(output: &mut SharedString, task_output: &SharedString) {
