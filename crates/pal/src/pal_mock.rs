@@ -1,3 +1,4 @@
+use crate::cancellation_token::CancellationToken;
 use crate::pal::{FileChangeCallback, Pal, ReadSeek};
 use crate::process_command::ProcessCommand;
 use crate::process_event::ProcessEvent;
@@ -235,6 +236,15 @@ impl Pal for PalMock {
         command: &ProcessCommand,
         sink: &mut dyn ProcessEventSink,
     ) -> NaoResult<ProcessResult> {
+        self.run_process_cancellable(command, sink, &CancellationToken::new())
+    }
+
+    fn run_process_cancellable(
+        &self,
+        command: &ProcessCommand,
+        sink: &mut dyn ProcessEventSink,
+        cancellation_token: &CancellationToken,
+    ) -> NaoResult<ProcessResult> {
         self.log_effect(format!(
             "RUN PROCESS: {} {}",
             command.executable,
@@ -263,6 +273,10 @@ impl Pal for PalMock {
         }
 
         for event in events {
+            if cancellation_token.is_cancelled() {
+                self.log_effect(format!("CANCEL PROCESS: {}", command.executable));
+                break;
+            }
             sink.handle_event(event)?;
         }
 
@@ -286,5 +300,72 @@ impl Pal for PalMock {
 impl Debug for PalMock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PalMock").finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PalMock;
+    use crate::cancellation_token::CancellationToken;
+    use crate::pal::Pal;
+    use crate::process_command::ProcessCommand;
+    use crate::process_event::ProcessEvent;
+    use crate::process_event_sink::ProcessEventSink;
+    use crate::process_exited_event::ProcessExitedEvent;
+    use crate::process_output_event::ProcessOutputEvent;
+    use crate::process_output_stream::ProcessOutputStream;
+    use crate::process_result::ProcessResult;
+    use nao_base::result::NaoResult;
+    use nao_base::timestamp::Timestamp;
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: Vec<ProcessEvent>,
+    }
+
+    impl ProcessEventSink for RecordingSink {
+        fn handle_event(&mut self, event: ProcessEvent) -> NaoResult<()> {
+            self.events.push(event);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cancellable_process_stops_before_delivering_more_events() {
+        let pal = PalMock::new();
+        let command = ProcessCommand {
+            executable: "server".into(),
+            arguments: Vec::new(),
+            working_directory: None,
+            environment: Vec::new(),
+        };
+        pal.set_process_execution(
+            command.clone(),
+            vec![
+                ProcessEvent::Output(ProcessOutputEvent {
+                    timestamp: Timestamp::new(1),
+                    stream: ProcessOutputStream::Stdout,
+                    bytes: b"ready\n".to_vec(),
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(2),
+                    exit_code: Some(0),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(2),
+                exit_code: Some(0),
+            },
+        );
+        let cancellation_token = CancellationToken::new();
+        cancellation_token.cancel();
+        let mut sink = RecordingSink::default();
+
+        pal.run_process_cancellable(&command, &mut sink, &cancellation_token)
+            .unwrap();
+
+        assert!(sink.events.is_empty());
+        assert!(pal.get_effects().contains("CANCEL PROCESS: server"));
     }
 }

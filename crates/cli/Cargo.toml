@@ -13,6 +13,7 @@ nao-engine = { path = "../engine", version = "0.1.6" }
 nao-pal = { path = "../pal", version = "0.1.6" }
 nao-recipe = { path = "../recipe", version = "0.1.6" }
 nao-tui = { path = "../tui", version = "0.1.6" }
+crossterm = { workspace = true }
 shadow-rs = { workspace = true }
 xflags = { workspace = true }
 

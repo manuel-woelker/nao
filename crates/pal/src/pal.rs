@@ -1,3 +1,4 @@
+use crate::cancellation_token::CancellationToken;
 use crate::process_command::ProcessCommand;
 use crate::process_event_sink::ProcessEventSink;
 use crate::process_result::ProcessResult;
@@ -73,6 +74,16 @@ pub trait Pal: Debug + Sync + Send + 'static {
         command: &ProcessCommand,
         sink: &mut dyn ProcessEventSink,
     ) -> NaoResult<ProcessResult>;
+
+    /// Execute a child process and request termination when the cancellation token is cancelled.
+    fn run_process_cancellable(
+        &self,
+        command: &ProcessCommand,
+        sink: &mut dyn ProcessEventSink,
+        _cancellation_token: &CancellationToken,
+    ) -> NaoResult<ProcessResult> {
+        self.run_process(command, sink)
+    }
 
     /// Returns a monotonic timestamp suitable for elapsed-time calculations and event ordering.
     fn now(&self) -> Timestamp;

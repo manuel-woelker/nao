@@ -9,6 +9,7 @@ use nao_base::shared_string::SharedString;
 use nao_engine::PlannedRun;
 use nao_engine::RunEngine;
 use nao_engine::run_artifact_writer::RunArtifactWriter;
+use nao_pal::cancellation_token::CancellationToken;
 use std::sync::mpsc;
 
 impl App {
@@ -47,16 +48,26 @@ impl App {
         };
         match active_run.receiver.try_recv() {
             Ok(Ok(result)) => {
-                self.status_message = Some(SharedString::from("run completed"));
                 let completed_run_directory = result.run_directory.clone();
                 self.active_run = None;
                 self.reload_history()?;
-                self.open_run(&completed_run_directory)?;
+                if let Some(goal_tasks) = self.pending_restart_goal_tasks.take() {
+                    self.start_goal_tasks(goal_tasks)?;
+                    self.status_message = Some(SharedString::from("run restarted"));
+                } else {
+                    self.status_message = Some(SharedString::from("run completed"));
+                    self.open_run(&completed_run_directory)?;
+                }
             }
             Ok(Err(error)) => {
-                self.status_message = Some(SharedString::from(error.to_test_string()));
                 self.active_run = None;
                 self.reload_history()?;
+                if let Some(goal_tasks) = self.pending_restart_goal_tasks.take() {
+                    self.start_goal_tasks(goal_tasks)?;
+                    self.status_message = Some(SharedString::from("run restarted"));
+                } else {
+                    self.status_message = Some(SharedString::from(error.to_test_string()));
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
@@ -247,6 +258,34 @@ impl App {
         Ok(())
     }
 
+    pub(super) fn restart_run(&mut self) -> NaoResult<()> {
+        if let Some(active_run) = &self.active_run {
+            let goal_tasks = active_run.requested_goal_tasks.clone();
+            active_run.cancellation_token.cancel();
+            self.pending_restart_goal_tasks = Some(goal_tasks);
+            self.status_message = Some(SharedString::from("restart requested"));
+            return Ok(());
+        }
+
+        if self.last_run_goal_tasks.is_empty() {
+            self.status_message = Some(SharedString::from("no run is available to restart"));
+            return Ok(());
+        }
+
+        self.start_goal_tasks(self.last_run_goal_tasks.clone())?;
+        self.status_message = Some(SharedString::from("run restarted"));
+        Ok(())
+    }
+
+    fn start_goal_tasks(&mut self, goal_tasks: Vec<SharedString>) -> NaoResult<()> {
+        let goal_task_names = goal_tasks
+            .iter()
+            .map(|task| task.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let plan = self.engine.plan_run(&self.recipe_path, &goal_task_names)?;
+        self.spawn_run(plan)
+    }
+
     pub(super) fn launcher_goal_tasks(&self) -> Vec<String> {
         if !self.selected_goals.is_empty() {
             return self
@@ -267,6 +306,11 @@ impl App {
         let run_started_at = self.pal.now();
         let run_started_system_time = self.pal.system_time();
         let recipe_path = self.recipe_path.clone();
+        let requested_goal_tasks = plan
+            .requested_tasks
+            .iter()
+            .map(|task| task.0.clone())
+            .collect::<Vec<_>>();
         let run_directory = RunArtifactWriter::preview_run_directory(
             &recipe_path,
             &plan
@@ -278,23 +322,29 @@ impl App {
         );
         let pal = self.pal.clone();
         let worker_plan = plan.clone();
+        let cancellation_token = CancellationToken::new();
+        let worker_cancellation_token = cancellation_token.clone();
 
         std::thread::spawn(move || {
             let engine = RunEngine::new(pal);
-            let result = engine.execute_planned_run_with_observer_started_at(
+            let result = engine.execute_planned_run_with_observer_started_at_cancellable(
                 &recipe_path,
                 &worker_plan,
                 &mut NoopObserver,
                 run_started_at,
                 run_started_system_time,
+                &worker_cancellation_token,
             );
             let _ = sender.send(result);
         });
 
         self.active_run = Some(ActiveRunHandle {
             run_directory: run_directory.clone(),
+            requested_goal_tasks: requested_goal_tasks.clone(),
+            cancellation_token,
             receiver,
         });
+        self.last_run_goal_tasks = requested_goal_tasks;
         self.launched_run_in_session = true;
         self.status_message = Some(SharedString::from("run started"));
         self.open_run(&run_directory)?;

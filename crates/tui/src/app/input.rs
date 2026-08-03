@@ -1,7 +1,7 @@
 use super::App;
 use super::Focus;
 use super::Screen;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use nao_base::result::NaoResult;
 
 impl App {
@@ -20,6 +20,10 @@ impl App {
             KeyCode::Char('q') => return Ok(true),
             KeyCode::Char('?') => {
                 self.help_visible = true;
+                return Ok(false);
+            }
+            KeyCode::Char('r') if key_event.modifiers == KeyModifiers::CONTROL => {
+                self.restart_run()?;
                 return Ok(false);
             }
             KeyCode::Char('1') => {

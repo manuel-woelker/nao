@@ -11,17 +11,25 @@ use crate::runner::rendering::render_running_line;
 use crate::runner::rendering::render_running_line_body;
 use crate::runner::rendering::render_success_summary;
 use core::fmt::Write as _;
+use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
 use nao_base::result::ResultExt;
 use nao_engine::RunEngine;
 use nao_engine::RunObserver;
 use nao_engine::RunStatus;
+use nao_pal::cancellation_token::CancellationToken;
 use nao_pal::pal::PalHandle;
 use nao_pal::process_output_stream::ProcessOutputStream;
 use nao_recipe::LiveDisplay;
 use nao_recipe::Task;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 
 struct DirectOutputDisplay {
     task_name_width: usize,
@@ -58,6 +66,110 @@ impl RunObserver for DirectOutputDisplay {
         {
             self.write_error = Some(error);
         }
+    }
+}
+
+struct CliRestartController {
+    current_token: Arc<Mutex<Option<CancellationToken>>>,
+    restart_requested: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<NaoResult<()>>>,
+}
+
+impl CliRestartController {
+    fn start(enabled: bool) -> NaoResult<Self> {
+        let current_token = Arc::new(Mutex::new(None::<CancellationToken>));
+        let restart_requested = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        if !enabled {
+            return Ok(Self {
+                current_token,
+                restart_requested,
+                stop,
+                handle: None,
+            });
+        }
+
+        enable_raw_mode().context("failed to enable raw mode for CLI restart shortcut")?;
+        live_display::set_raw_mode_output(true);
+        let thread_current_token = Arc::clone(&current_token);
+        let thread_restart_requested = Arc::clone(&restart_requested);
+        let thread_stop = Arc::clone(&stop);
+        let handle = thread::spawn(move || {
+            while !thread_stop.load(Ordering::Relaxed) {
+                if !crossterm::event::poll(Duration::from_millis(50))
+                    .context("failed to poll CLI keyboard events")?
+                {
+                    continue;
+                }
+                let Event::Key(key_event) =
+                    crossterm::event::read().context("failed to read CLI keyboard event")?
+                else {
+                    continue;
+                };
+                if key_event.code == KeyCode::Char('r')
+                    && key_event.modifiers == KeyModifiers::CONTROL
+                {
+                    thread_restart_requested.store(true, Ordering::SeqCst);
+                    if let Some(token) = thread_current_token
+                        .lock()
+                        .map_err(|_| nao_base::err!("failed to lock CLI restart token"))?
+                        .as_ref()
+                    {
+                        token.cancel();
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        Ok(Self {
+            current_token,
+            restart_requested,
+            stop,
+            handle: Some(handle),
+        })
+    }
+
+    fn set_current_token(&self, token: CancellationToken) -> NaoResult<()> {
+        *self
+            .current_token
+            .lock()
+            .map_err(|_| nao_base::err!("failed to lock CLI restart token"))? = Some(token);
+        self.restart_requested.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn clear_current_token(&self) -> NaoResult<()> {
+        *self
+            .current_token
+            .lock()
+            .map_err(|_| nao_base::err!("failed to lock CLI restart token"))? = None;
+        Ok(())
+    }
+
+    fn take_restart_requested(&self) -> bool {
+        self.restart_requested.swap(false, Ordering::SeqCst)
+    }
+
+    fn stop(&mut self) -> NaoResult<()> {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let result = handle
+                .join()
+                .map_err(|_| nao_base::err!("CLI restart listener thread panicked"))?;
+            live_display::set_raw_mode_output(false);
+            result?;
+            disable_raw_mode().context("failed to disable raw mode for CLI restart shortcut")?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for CliRestartController {
+    fn drop(&mut self) {
+        let _ = self.stop();
     }
 }
 
@@ -102,10 +214,10 @@ impl Runner {
             });
         }
 
-        let run_started_at = self.pal.now();
-        let run_started_system_time = self.pal.system_time();
         let plan = self.engine.plan_run(recipe_path, task_names)?;
         if ci {
+            let run_started_at = self.pal.now();
+            let run_started_system_time = self.pal.system_time();
             let mut ci_display = CiDisplay::default();
             let result = self.engine.execute_planned_run_with_observer_started_at(
                 recipe_path,
@@ -125,6 +237,59 @@ impl Runner {
             });
         }
 
+        let mut restart_controller =
+            CliRestartController::start(self.pal.is_interactive_terminal())?;
+        let result = loop {
+            let run_started_at = self.pal.now();
+            let run_started_system_time = self.pal.system_time();
+            let cancellation_token = CancellationToken::new();
+            restart_controller.set_current_token(cancellation_token.clone())?;
+            let result = self.execute_interactive_run_once(
+                recipe_path,
+                &plan,
+                run_started_at,
+                run_started_system_time,
+                &cancellation_token,
+            )?;
+            restart_controller.clear_current_token()?;
+            if restart_controller.take_restart_requested() {
+                live_display::write_stdout("Restarting run after Ctrl+R\n")
+                    .context("failed to render CLI restart status")?;
+                continue;
+            }
+            break result;
+        };
+        restart_controller.stop()?;
+
+        let output = match &result.status {
+            RunStatus::Completed => render_success_summary(
+                &result.goal_tasks,
+                result.total_task_count,
+                result.duration_nanos,
+                result.goal_outcome_message.as_deref(),
+            ),
+            RunStatus::Failed(task_failure) => {
+                render_failure_summary(&result.goal_tasks, task_failure)
+            }
+        };
+
+        Ok(RunnerOutput {
+            output,
+            exit_code: match result.status {
+                RunStatus::Completed => ExitCode::SUCCESS,
+                RunStatus::Failed(_) => ExitCode::FAILURE,
+            },
+        })
+    }
+
+    fn execute_interactive_run_once(
+        &self,
+        recipe_path: &FilePath,
+        plan: &nao_engine::PlannedRun,
+        run_started_at: nao_base::timestamp::Timestamp,
+        run_started_system_time: std::time::SystemTime,
+        cancellation_token: &CancellationToken,
+    ) -> NaoResult<nao_engine::RunExecutionResult> {
         let running_line_body = render_running_line_body(&plan.requested_tasks, plan.tasks.len());
         let mut line_per_task_display = None;
         let mut single_line_display = None;
@@ -150,29 +315,35 @@ impl Runner {
         let mut direct_output_display = DirectOutputDisplay::new(&plan.tasks);
 
         let result = if let Some(display) = line_per_task_display.as_mut() {
-            self.engine.execute_planned_run_with_observer_started_at(
-                recipe_path,
-                &plan,
-                display,
-                run_started_at,
-                run_started_system_time,
-            )?
+            self.engine
+                .execute_planned_run_with_observer_started_at_cancellable(
+                    recipe_path,
+                    plan,
+                    display,
+                    run_started_at,
+                    run_started_system_time,
+                    cancellation_token,
+                )?
         } else if let Some(display) = single_line_display.as_mut() {
-            self.engine.execute_planned_run_with_observer_started_at(
-                recipe_path,
-                &plan,
-                display,
-                run_started_at,
-                run_started_system_time,
-            )?
+            self.engine
+                .execute_planned_run_with_observer_started_at_cancellable(
+                    recipe_path,
+                    plan,
+                    display,
+                    run_started_at,
+                    run_started_system_time,
+                    cancellation_token,
+                )?
         } else {
-            self.engine.execute_planned_run_with_observer_started_at(
-                recipe_path,
-                &plan,
-                &mut direct_output_display,
-                run_started_at,
-                run_started_system_time,
-            )?
+            self.engine
+                .execute_planned_run_with_observer_started_at_cancellable(
+                    recipe_path,
+                    plan,
+                    &mut direct_output_display,
+                    run_started_at,
+                    run_started_system_time,
+                    cancellation_token,
+                )?
         };
         if let Some(display) = single_line_display.as_mut() {
             display.finish()?;
@@ -183,25 +354,7 @@ impl Runner {
         direct_output_display.finish()?;
         drop(single_line_display);
         drop(line_per_task_display);
-        let output = match &result.status {
-            RunStatus::Completed => render_success_summary(
-                &result.goal_tasks,
-                result.total_task_count,
-                result.duration_nanos,
-                result.goal_outcome_message.as_deref(),
-            ),
-            RunStatus::Failed(task_failure) => {
-                render_failure_summary(&result.goal_tasks, task_failure)
-            }
-        };
-
-        Ok(RunnerOutput {
-            output,
-            exit_code: match result.status {
-                RunStatus::Completed => ExitCode::SUCCESS,
-                RunStatus::Failed(_) => ExitCode::FAILURE,
-            },
-        })
+        Ok(result)
     }
 
     fn render_task_list(&self, tasks: &[Task], interactive_terminal: bool) -> String {

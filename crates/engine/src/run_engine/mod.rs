@@ -18,6 +18,7 @@ use nao_base::file_path::FilePath;
 use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
 use nao_base::timestamp::Timestamp;
+use nao_pal::cancellation_token::CancellationToken;
 use nao_pal::pal::PalHandle;
 use nao_pal::process_output_stream::ProcessOutputStream;
 use nao_recipe::{Task, TaskName, load_recipe_with_pal};
@@ -169,6 +170,26 @@ impl RunEngine {
         run_started_at: Timestamp,
         run_started_system_time: SystemTime,
     ) -> NaoResult<RunExecutionResult> {
+        self.execute_planned_run_with_observer_started_at_cancellable(
+            recipe_path,
+            plan,
+            observer,
+            run_started_at,
+            run_started_system_time,
+            &CancellationToken::new(),
+        )
+    }
+
+    /// Executes an already planned run using the provided run start time and emits task lifecycle updates.
+    pub fn execute_planned_run_with_observer_started_at_cancellable(
+        &self,
+        recipe_path: &FilePath,
+        plan: &PlannedRun,
+        observer: &mut dyn RunObserver,
+        run_started_at: Timestamp,
+        run_started_system_time: SystemTime,
+        cancellation_token: &CancellationToken,
+    ) -> NaoResult<RunExecutionResult> {
         let writer = RunArtifactWriter::new(
             self.pal.clone(),
             recipe_path,
@@ -189,6 +210,7 @@ impl RunEngine {
                 observer,
                 run_started_at,
                 &writer,
+                cancellation_token,
             )?;
 
         let run_finished_at = self.pal.now();

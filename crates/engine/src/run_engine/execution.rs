@@ -19,6 +19,7 @@ use nao_base::result::NaoResult;
 use nao_base::result::{OptionExt, ResultExt};
 use nao_base::shared_string::SharedString;
 use nao_base::timestamp::Timestamp;
+use nao_pal::cancellation_token::CancellationToken;
 use nao_pal::pal::PalHandle;
 use nao_pal::process_output_stream::ProcessOutputStream;
 use nao_recipe::{FailureMode, Task, TaskName};
@@ -34,6 +35,7 @@ impl RunEngine {
         observer: &mut dyn RunObserver,
         run_started_at: Timestamp,
         writer: &RunArtifactWriter,
+        cancellation_token: &CancellationToken,
     ) -> NaoResult<TaskRunArtifacts> {
         let max_parallel_tasks = plan.max_parallel_tasks.max(1);
         let (dependents, mut remaining_prerequisites) = build_dependency_graph(&plan.tasks)?;
@@ -64,6 +66,9 @@ impl RunEngine {
         let mut stop_launching = false;
 
         while running_count > 0 || (!stop_launching && !ready_queue.is_empty()) {
+            if cancellation_token.is_cancelled() {
+                stop_launching = true;
+            }
             while !stop_launching && running_count < max_parallel_tasks && !ready_queue.is_empty() {
                 let task_index = ready_queue.pop_front().with_context(|| {
                     "ready queue was empty while scheduling runnable tasks".to_owned()
@@ -84,6 +89,7 @@ impl RunEngine {
                 let pal = self.pal.clone();
                 let worker_recipe_path = recipe_path.clone();
                 let worker_writer = writer.clone();
+                let worker_cancellation_token = cancellation_token.clone();
                 let task_name = task.name.0.clone();
                 join_handles.push(thread::spawn(move || {
                     let (task_output, log_lines, execution_result, worker_sender) = execute_task(
@@ -93,6 +99,7 @@ impl RunEngine {
                         worker_writer,
                         task_index,
                         worker_sender,
+                        worker_cancellation_token,
                     );
                     worker_sender
                         .send(TaskExecutionMessage::Finished {
@@ -155,7 +162,8 @@ impl RunEngine {
             match execution_result {
                 Ok(result) => {
                     let outcome_message = extract_task_outcome_message(&log_lines);
-                    let task_failed = result.exit_code.unwrap_or(1) != 0;
+                    let task_cancelled = cancellation_token.is_cancelled();
+                    let task_failed = task_cancelled || result.exit_code.unwrap_or(1) != 0;
                     if task_failed {
                         states[task_index] = TaskRunState::Failed;
                         observer.on_task_failed(
@@ -195,7 +203,11 @@ impl RunEngine {
                                 ),
                                 output_tail_lines: task_output_tail_lines(&log_lines),
                             };
-                            failure_message = Some(render_task_failure_message(&task_failure));
+                            failure_message = Some(if task_cancelled {
+                                render_task_cancelled_message(&task_failure)
+                            } else {
+                                render_task_failure_message(&task_failure)
+                            });
                             run_status = RunStatus::Failed(task_failure);
                         }
                     } else {
@@ -223,7 +235,13 @@ impl RunEngine {
                     }
 
                     let status = if task_failed { "failed" } else { "completed" };
-                    let result_name = if task_failed { "failed" } else { "success" };
+                    let result_name = if task_cancelled {
+                        "cancelled"
+                    } else if task_failed {
+                        "failed"
+                    } else {
+                        "success"
+                    };
                     task_events.push(TaskEventRecord::Finished {
                         task_name: task.name.0.clone(),
                         timestamp: result.finished_at,
@@ -334,6 +352,28 @@ impl RunEngine {
             }
         }
 
+        if cancellation_token.is_cancelled() && failure_message.is_none() {
+            let cancelled_at = self.pal.now();
+            let task_name = plan
+                .requested_tasks
+                .first()
+                .or_else(|| plan.tasks.first().map(|task| &task.name))
+                .map(|task| task.0.clone())
+                .unwrap_or_else(SharedString::empty);
+            let task_failure = TaskFailure {
+                task_name,
+                exit_code: -1,
+                elapsed_nanos: cancelled_at
+                    .as_nanos()
+                    .saturating_sub(run_started_at.as_nanos()),
+                successful_task_count,
+                omitted_output_line_count: 0,
+                output_tail_lines: Vec::new(),
+            };
+            failure_message = Some(render_task_cancelled_message(&task_failure));
+            run_status = RunStatus::Failed(task_failure);
+        }
+
         let mut output = SharedString::empty();
         for task_output in &output_by_task {
             append_task_output(&mut output, task_output);
@@ -360,6 +400,7 @@ fn execute_task(
     writer: RunArtifactWriter,
     task_index: usize,
     sender: mpsc::Sender<TaskExecutionMessage>,
+    cancellation_token: CancellationToken,
 ) -> (
     SharedString,
     TaskLogLines,
@@ -377,7 +418,7 @@ fn execute_task(
     let execution_result =
         match crate::run_engine::process_command::build_process_command(&recipe_path, &task) {
             Ok(command) => pal
-                .run_process(&command, &mut framer)
+                .run_process_cancellable(&command, &mut framer, &cancellation_token)
                 .map_err(|error| SharedString::from(error.to_test_string().as_str())),
             Err(error) => Err(SharedString::from(error.to_test_string().as_str())),
         };
@@ -486,6 +527,15 @@ fn render_task_failure_message(task_failure: &TaskFailure) -> String {
         "task `{}` failed with exit code {} after {} ({} completed successfully)",
         task_failure.task_name.as_str(),
         task_failure.exit_code,
+        pretty_duration(task_failure.elapsed_nanos),
+        render_completed_task_count(task_failure.successful_task_count),
+    )
+}
+
+fn render_task_cancelled_message(task_failure: &TaskFailure) -> String {
+    format!(
+        "run cancelled while task `{}` was running after {} ({} completed successfully)",
+        task_failure.task_name.as_str(),
         pretty_duration(task_failure.elapsed_nanos),
         render_completed_task_count(task_failure.successful_task_count),
     )

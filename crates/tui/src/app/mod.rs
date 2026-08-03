@@ -13,6 +13,7 @@ use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
 use nao_engine::RunEngine;
 use nao_engine::RunExecutionResult;
+use nao_pal::cancellation_token::CancellationToken;
 use nao_pal::pal::PalHandle;
 use nao_recipe::Task;
 use std::collections::BTreeSet;
@@ -47,6 +48,8 @@ enum Focus {
 #[derive(Debug)]
 struct ActiveRunHandle {
     run_directory: FilePath,
+    requested_goal_tasks: Vec<SharedString>,
+    cancellation_token: CancellationToken,
     receiver: Receiver<NaoResult<RunExecutionResult>>,
 }
 
@@ -89,6 +92,8 @@ pub struct App {
     auto_follow_log: bool,
     status_message: Option<SharedString>,
     active_run: Option<ActiveRunHandle>,
+    last_run_goal_tasks: Vec<SharedString>,
+    pending_restart_goal_tasks: Option<Vec<SharedString>>,
     launched_run_in_session: bool,
     spinner_frame: usize,
     refresh_tick: u64,
@@ -126,6 +131,8 @@ impl App {
             auto_follow_log: true,
             status_message: None,
             active_run: None,
+            last_run_goal_tasks: Vec::new(),
+            pending_restart_goal_tasks: None,
             launched_run_in_session: false,
             spinner_frame: 0,
             refresh_tick: 0,

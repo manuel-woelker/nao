@@ -19,6 +19,7 @@ Default behavior
   Running `nao` with no task names opens the TUI using `.nao/nao.kdl` in the current directory.
   If `nao` runs without an interactive terminal, it prints text help instead of opening the TUI.
   Running `nao build test` executes the requested goal tasks and any dependencies they need.
+  During an interactive CLI run, press Ctrl+R to restart the same requested task graph.
   Running `nao --list` prints the task names defined in the selected recipe file.
   Running `nao --ci build test` disables interactive progress, prints task lifecycle updates,
   then emits executed task logs and a final run summary.
@@ -220,6 +221,7 @@ OPTIONS:
         assert!(help.contains("Task outcomes"));
         assert!(help.contains("direct-output=#true"));
         assert!(help.contains("nao --ci build test"));
+        assert!(help.contains("Ctrl+R to restart"));
         assert!(help.contains("run shell=\"<command>\""));
         assert!(help.contains("artifact \"<name>\" path=\"<path>\""));
         assert!(help.contains("nao --init"));

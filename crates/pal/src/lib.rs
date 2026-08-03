@@ -1,3 +1,4 @@
+pub mod cancellation_token;
 pub mod pal;
 pub mod pal_mock;
 pub mod pal_real;

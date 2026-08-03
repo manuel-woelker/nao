@@ -12,4 +12,4 @@ expect-test = {workspace = true}
 ignore = {workspace = true}
 notify-debouncer-full = {workspace = true}
 relative-path = {workspace = true}
-tokio = { version = "1.44.2", features = ["io-util", "macros", "process", "rt-multi-thread", "sync"] }
+tokio = { version = "1.44.2", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }

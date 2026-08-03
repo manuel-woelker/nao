@@ -127,7 +127,7 @@ impl App {
                 .join(", ")
         };
         let footer_text = format!(
-            "Selected goals: {selected_goals} | Space toggle | Enter start run | r history | o failed output | ? help | q quit"
+            "Selected goals: {selected_goals} | Space toggle | Enter start | Ctrl+R restart | r history | o failed output | ? help | q quit"
         );
         self.render_footer(frame, layout[2], &footer_text);
     }
@@ -294,7 +294,7 @@ impl App {
         self.render_footer(
             frame,
             layout[2],
-            "Enter open run | l launcher | R refresh history | ? help | q quit",
+            "Enter open run | l launcher | Ctrl+R restart | R refresh history | ? help | q quit",
         );
     }
 
@@ -317,7 +317,7 @@ impl App {
             frame,
             layout[2],
             &format!(
-                "Focus {} | Tab pane | j/k move | Enter follow task | t/o/e/s focus | r history | L auto-follow | ? help | q quit",
+                "Focus {} | Tab pane | j/k move | Enter follow task | Ctrl+R restart | t/o/e/s focus | r history | L auto-follow | ? help | q quit",
                 self.focus_label()
             ),
         );
@@ -513,6 +513,7 @@ impl App {
             Line::from("2 run detail"),
             Line::from("3 run history"),
             Line::from("Tab / Shift-Tab cycle panes"),
+            Line::from("Ctrl+R restart active or last run"),
             Line::from("Launcher: j/k move, Space toggle, Enter start run"),
             Line::from("History: j/k move, Enter open, R refresh"),
             Line::from("Detail: t/o/e/s focus, j/k move, g/G top/bottom, L auto-follow"),

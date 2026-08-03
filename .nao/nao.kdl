@@ -80,6 +80,13 @@ recipe "default" {
     run script="./scripts/check-code.sh"
   }
 
+  task "install-nao" description="Install the nao CLI from this checkout" {
+    run shell="""
+      cargo install --path crates/cli --force
+      printf 'Task outcome: nao CLI installed\n'
+    """
+  }
+
   task "hello-docker" description="Print a greeting from a container" {
     run container="alpine:3.22" {
       args "sh" "-lc" "printf 'hello from docker\n'; printf 'Task outcome: greeted from docker\n'"

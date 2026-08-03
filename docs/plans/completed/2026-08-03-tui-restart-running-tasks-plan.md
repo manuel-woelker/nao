@@ -144,22 +144,23 @@ The recommended order is:
 11. Add focused tests for active restart, no-target restart, and shortcut routing.
 12. Run repository-wide verification.
 
-# What concrete work items are planned?
+# What concrete work items were completed?
 
-- [ ] Add a cancellable process execution API at the PAL boundary.
-- [ ] Implement child-process termination in `PalReal`.
-- [ ] Add `PalMock` support for deterministic cancellation tests.
-- [ ] Thread cancellation through `RunEngine` without breaking existing non-cancellable callers.
-- [ ] Persist interrupted run state clearly enough that history and detail views can inspect the old run.
-- [ ] Store active and last-launched requested goal tasks in TUI state.
-- [ ] Add `restart_run` lifecycle behavior that stops the active run before relaunching.
-- [ ] Add global `Ctrl+R` input handling.
-- [ ] Update help and footer text for the restart shortcut.
-- [ ] Add engine or PAL tests for cancellation of a running task.
-- [ ] Add TUI tests for restart while a run is active.
-- [ ] Add TUI tests for `Ctrl+R` with no restart target.
-- [ ] Add TUI tests proving restart uses the previous goal tasks instead of the current launcher selection.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Add a cancellable process execution API at the PAL boundary.
+- [x] Implement child-process termination in `PalReal`.
+- [x] Add `PalMock` support for deterministic cancellation tests.
+- [x] Thread cancellation through `RunEngine` without breaking existing non-cancellable callers.
+- [x] Persist interrupted run state clearly enough that history and detail views can inspect the old run.
+- [x] Store active and last-launched requested goal tasks in TUI state.
+- [x] Add `restart_run` lifecycle behavior that stops the active run before relaunching.
+- [x] Add global `Ctrl+R` input handling.
+- [x] Update help and footer text for the restart shortcut.
+- [x] Add CLI `Ctrl+R` handling for interactive non-CI runs.
+- [x] Add engine and PAL tests for cancellation of a running task.
+- [x] Add TUI tests for restart while a run is active.
+- [x] Add TUI tests for `Ctrl+R` with no restart target.
+- [x] Add TUI tests proving restart uses the previous goal tasks instead of the current launcher selection.
+- [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
 
@@ -170,8 +171,25 @@ Verification should include:
 - TUI tests for `Ctrl+R` routing from launcher, detail, and history screens
 - TUI tests proving restart relaunches the same requested goals
 - TUI tests proving no active or previous run produces a helpful status message
+- CLI runner and help-text tests proving the run loop still works and documents the shortcut
 - manual testing with `.nao/nao.kdl` task `counter-direct`
 - `./scripts/check-code.sh`
+
+The implementation was verified with focused PAL, engine, TUI, CLI runner, and help-text tests, then with `./scripts/check-code.sh`.
+
+# What was implemented?
+
+The completed implementation adds a cloneable cancellation token in `nao-pal`, a cancellable process execution API, real child termination in `PalReal`, and deterministic cancellation behavior in `PalMock`.
+
+`RunEngine` now exposes a cancellable execution entry point while keeping existing non-cancellable callers unchanged.
+Cancelled runs use the existing failed-run summary shape, with interrupted task records using `result: cancelled` and an explicit cancellation failure message.
+
+The TUI stores active and last-launched goal tasks, handles `Ctrl+R` globally, cancels an active run before relaunching the same goal tasks, and can restart the last in-session run when no run is active.
+Help and footer text now mention the shortcut.
+
+The CLI also handles `Ctrl+R` during interactive non-CI runs.
+It enables raw keyboard polling while a run is active, cancels the current run token on `Ctrl+R`, and relaunches the same planned task graph after cancellation completes.
+CI and non-interactive redirected runs do not read keyboard input.
 
 # What assumptions and risks matter?
 
@@ -187,9 +205,9 @@ The main risk is cancellation semantics across platforms.
 Unix process termination and Windows process termination may need separate implementation details.
 The plan should keep the public behavior stable while allowing platform-specific PAL code underneath.
 
-# What open questions should be settled during implementation?
+# What decisions and follow-up questions remain?
 
-- Should cancelled runs get a first-class `cancelled` status in `nao-summary.json`, or should they remain failed with an explicit cancellation message?
-- Should restart preserve the same run detail focus and selected task when the new run opens?
-- Should `Ctrl+R` work when a completed historical run is selected, restarting that historical run's requested goals?
-- Should long-running tasks later get a graceful shutdown timeout before force-kill?
+- Cancelled runs remain failed runs for now, with interrupted task records marked `cancelled`.
+- Restart opens the new run using the existing run-opening behavior rather than preserving selected task focus.
+- `Ctrl+R` restarts only the active or last in-session run, not an arbitrary historical selection.
+- Long-running tasks may later need a graceful shutdown timeout before force-kill.

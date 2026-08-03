@@ -10,6 +10,7 @@ use expect_test::expect;
 use nao_base::file_path::FilePath;
 use nao_base::shared_string::SharedString;
 use nao_base::timestamp::Timestamp;
+use nao_pal::cancellation_token::CancellationToken;
 use nao_pal::pal::PalHandle;
 use nao_pal::pal_mock::PalMock;
 use nao_pal::process_command::ProcessCommand;
@@ -22,6 +23,7 @@ use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
 use nao_recipe::FailureMode;
 use nao_recipe::LiveDisplay;
 use nao_recipe::RunSpec;
+use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
 
@@ -1453,6 +1455,62 @@ fn streams_direct_output_as_complete_lines_from_split_chunks() {
         observer.0,
         vec!["ready at localhost".to_owned(), "next line".to_owned()]
     );
+}
+
+#[test]
+fn cancellation_interrupts_running_task_and_records_failed_run() {
+    let pal = PalMock::new();
+    pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+    pal.set_file(
+        "nao.kdl",
+        r#"
+            recipe "default" {
+              task "server" {
+                run script="./scripts/server.sh"
+              }
+            }
+            "#,
+    );
+    set_script_process_with_delay(
+        &pal,
+        "./scripts/server.sh",
+        &[b"server still running\n"],
+        0,
+        Duration::from_millis(100),
+    );
+    let engine = RunEngine::new(PalHandle::new(pal.clone()));
+    let plan = engine
+        .plan_run(&FilePath::from("nao.kdl"), &["server".to_owned()])
+        .unwrap();
+    let cancellation_token = CancellationToken::new();
+    let worker_cancellation_token = cancellation_token.clone();
+
+    let handle = thread::spawn(move || {
+        let mut observer = crate::run_engine::execution::NoopRunObserver;
+        engine
+            .execute_planned_run_with_observer_started_at_cancellable(
+                &FilePath::from("nao.kdl"),
+                &plan,
+                &mut observer,
+                Timestamp::new(0),
+                SystemTime::UNIX_EPOCH,
+                &worker_cancellation_token,
+            )
+            .unwrap()
+    });
+    thread::sleep(Duration::from_millis(10));
+    cancellation_token.cancel();
+
+    let result = handle.join().unwrap();
+
+    assert!(matches!(result.status, RunStatus::Failed(_)));
+    assert_eq!(result.task_results[0].result.as_str(), "cancelled");
+    let summary = pal
+        .read_file_string(".nao/runs/1970-01-01T00-00-00Z-server/nao-summary.json")
+        .unwrap();
+    assert!(summary.contains("\"result\": \"failed\""));
+    assert!(summary.contains("\"result\": \"cancelled\""));
+    assert!(summary.contains("run cancelled while task `server` was running"));
 }
 
 #[test]

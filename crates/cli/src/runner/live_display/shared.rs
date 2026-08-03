@@ -6,6 +6,9 @@ use nao_recipe::Task;
 use std::io::Write as _;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static RAW_MODE_OUTPUT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LiveTaskStatus {
@@ -33,9 +36,17 @@ pub(super) struct LiveTaskSnapshot {
 
 pub fn write_stdout(content: &str) -> NaoResult<()> {
     let mut stdout = std::io::stdout();
-    stdout.write_all(content.as_bytes())?;
+    if RAW_MODE_OUTPUT.load(Ordering::Relaxed) {
+        stdout.write_all(content.replace('\n', "\r\n").as_bytes())?;
+    } else {
+        stdout.write_all(content.as_bytes())?;
+    }
     stdout.flush()?;
     Ok(())
+}
+
+pub fn set_raw_mode_output(enabled: bool) {
+    RAW_MODE_OUTPUT.store(enabled, Ordering::Relaxed);
 }
 
 pub(super) fn new_snapshot(header: String, tasks: &[Task]) -> LiveTaskSnapshot {

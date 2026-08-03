@@ -3,6 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use nao_base::file_path::FilePath;
 use nao_base::shared_string::SharedString;
 use nao_base::timestamp::Timestamp;
+use nao_pal::cancellation_token::CancellationToken;
 use nao_pal::pal::PalHandle;
 use nao_pal::pal_mock::PalMock;
 use nao_pal::process_command::ProcessCommand;
@@ -211,6 +212,8 @@ fn test_app_with_active_run() -> (App, PalMock) {
     mem::forget(sender);
     app.active_run = Some(ActiveRunHandle {
         run_directory: FilePath::from(".nao/runs/1970-01-01T00-00-00Z-test"),
+        requested_goal_tasks: vec![SharedString::from("test")],
+        cancellation_token: CancellationToken::new(),
         receiver,
     });
     pal.clear_effects();
@@ -258,6 +261,73 @@ fn launching_keeps_the_launcher_screen_active() {
 
     assert_eq!(app.screen, Screen::Launcher);
     assert!(app.active_run.is_some());
+}
+
+#[test]
+fn ctrl_r_requests_restart_for_active_run() {
+    let (mut app, _) = test_app_with_active_run();
+    app.selected_goals.insert("build".into());
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL))
+        .unwrap();
+
+    let active_run = app.active_run.as_ref().unwrap();
+    assert!(active_run.cancellation_token.is_cancelled());
+    assert_eq!(
+        app.pending_restart_goal_tasks,
+        Some(vec![SharedString::from("test")])
+    );
+    assert_eq!(app.status_message.as_deref(), Some("restart requested"));
+}
+
+#[test]
+fn ctrl_r_without_restart_target_reports_status() {
+    let mut app = test_app();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL))
+        .unwrap();
+
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("no run is available to restart")
+    );
+}
+
+#[test]
+fn ctrl_r_restarts_last_goal_instead_of_current_launcher_selection() {
+    let mut app = test_app();
+    app.last_run_goal_tasks = vec![SharedString::from("build")];
+    app.selected_task_index = 1;
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL))
+        .unwrap();
+
+    assert_eq!(
+        app.active_run
+            .as_ref()
+            .map(|active_run| active_run.requested_goal_tasks.clone()),
+        Some(vec![SharedString::from("build")])
+    );
+    assert_eq!(app.status_message.as_deref(), Some("run restarted"));
+}
+
+#[test]
+fn ctrl_r_is_global_across_tui_screens() {
+    for screen in [Screen::Launcher, Screen::RunDetail, Screen::RunHistory] {
+        let mut app = test_app();
+        app.screen = screen;
+        app.last_run_goal_tasks = vec![SharedString::from("build")];
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL))
+            .unwrap();
+
+        assert_eq!(
+            app.active_run
+                .as_ref()
+                .map(|active_run| active_run.requested_goal_tasks.clone()),
+            Some(vec![SharedString::from("build")])
+        );
+    }
 }
 
 #[test]
@@ -507,6 +577,8 @@ fn refresh_uses_completed_run_directory_from_engine_result() {
         .unwrap();
     app.active_run = Some(ActiveRunHandle {
         run_directory: FilePath::from(".nao/runs/1970-01-01T00-00-00Z-build"),
+        requested_goal_tasks: vec![SharedString::from("build")],
+        cancellation_token: CancellationToken::new(),
         receiver,
     });
     pal.set_file(

@@ -1,3 +1,4 @@
+use crate::cancellation_token::CancellationToken;
 use crate::pal::{FileChangeCallback, FileChangeEvent, Pal, PalHandle, ReadSeek};
 use crate::process_command::ProcessCommand;
 use crate::process_event::ProcessEvent;
@@ -98,6 +99,7 @@ impl PalReal {
         &self,
         command: &ProcessCommand,
         sink: &mut dyn ProcessEventSink,
+        cancellation_token: &CancellationToken,
     ) -> NaoResult<ProcessResult> {
         let mut child_command = Command::new(command.executable.as_str());
         child_command.args(command.arguments.iter().map(|argument| argument.as_str()));
@@ -148,8 +150,8 @@ impl PalReal {
         let mut stream_closes = 0usize;
         let mut finished_at = started_at;
         let mut exit_code = None;
-        let mut wait_future = Box::pin(child.wait());
         let mut exit_observed = false;
+        let mut kill_requested = false;
 
         while !exit_observed || stream_closes < expected_stream_closes {
             tokio::select! {
@@ -165,20 +167,31 @@ impl PalReal {
                         )
                     })?;
                 }
-                exit_status = &mut wait_future, if !exit_observed => {
-                    let exit_status = exit_status.with_context(|| {
+                _ = tokio::time::sleep(Duration::from_millis(20)), if !exit_observed => {
+                    if cancellation_token.is_cancelled() && !kill_requested {
+                        child.start_kill().with_context(|| {
+                            format!(
+                                "Unable to terminate process '{}'",
+                                command.executable.as_str()
+                            )
+                        })?;
+                        kill_requested = true;
+                    }
+
+                    if let Some(exit_status) = child.try_wait().with_context(|| {
                         format!(
                             "Unable to wait for process '{}'",
                             command.executable.as_str()
                         )
-                    })?;
-                    finished_at = Self::timestamp_from(&reference_instant);
-                    exit_code = exit_status.code();
-                    sink.handle_event(ProcessEvent::Exited(ProcessExitedEvent {
-                        timestamp: finished_at,
-                        exit_code,
-                    }))?;
-                    exit_observed = true;
+                    })? {
+                        finished_at = Self::timestamp_from(&reference_instant);
+                        exit_code = exit_status.code();
+                        sink.handle_event(ProcessEvent::Exited(ProcessExitedEvent {
+                            timestamp: finished_at,
+                            exit_code,
+                        }))?;
+                        exit_observed = true;
+                    }
                 }
             }
         }
@@ -345,7 +358,18 @@ impl Pal for PalReal {
         command: &ProcessCommand,
         sink: &mut dyn ProcessEventSink,
     ) -> NaoResult<ProcessResult> {
-        self.runtime.block_on(self.run_process_async(command, sink))
+        self.runtime
+            .block_on(self.run_process_async(command, sink, &CancellationToken::new()))
+    }
+
+    fn run_process_cancellable(
+        &self,
+        command: &ProcessCommand,
+        sink: &mut dyn ProcessEventSink,
+        cancellation_token: &CancellationToken,
+    ) -> NaoResult<ProcessResult> {
+        self.runtime
+            .block_on(self.run_process_async(command, sink, cancellation_token))
     }
 
     fn now(&self) -> Timestamp {

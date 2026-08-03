@@ -904,6 +904,7 @@ dependencies = [
 name = "nao"
 version = "0.1.6"
 dependencies = [
+ "crossterm",
  "expect-test",
  "nao-base",
  "nao-engine",
