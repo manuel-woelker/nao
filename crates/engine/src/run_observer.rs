@@ -1,3 +1,5 @@
+use nao_pal::process_output_stream::ProcessOutputStream;
+
 /// Receives task lifecycle updates while a planned run is executing.
 pub trait RunObserver {
     /// Called when a task begins execution.
@@ -5,6 +7,10 @@ pub trait RunObserver {
 
     /// Called when a running task reports a new status message.
     fn on_task_status(&mut self, _task_name: &str, _status_message: &str) {}
+
+    /// Called when an opted-in task emits one framed process output line.
+    fn on_task_output_line(&mut self, _task_name: &str, _stream: ProcessOutputStream, _line: &str) {
+    }
 
     /// Called when a task exits successfully.
     fn on_task_completed(

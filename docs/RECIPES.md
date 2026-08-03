@@ -38,6 +38,7 @@ In practice, that means a task definition will usually include:
 - An execution mode such as shell, script, or container
 - Optional environment variables
 - Optional artifact declarations
+- Optional direct output for long-running tasks
 
 # What naming rules apply to tasks?
 
@@ -97,6 +98,10 @@ recipe "default" {
     env RUST_LOG="warn"
   }
 
+  task "dev-server" direct-output=#true {
+    run shell="pnpm dev"
+  }
+
   task "image" {
     depends-on "build"
     run container="nao-packager:latest" {
@@ -127,6 +132,7 @@ The example shows several important ideas:
 - `build`, `lint`, and `verify-docs` can start immediately because they have no prerequisites
 - `test` and `image` wait for `build`
 - `integration-test` uses the checked-in Compose project under `.docker/`
+- `dev-server` streams its process output directly while it runs
 - `ci` acts as a coordination task that depends on multiple other tasks
 - Execution can be expressed in different forms, including shell commands, scripts, and containers
 - Artifacts can be declared explicitly so produced outputs become part of the task description
@@ -211,6 +217,26 @@ printf 'Task status: processed 12/30 files\n'
 ```
 
 Status lines remain in the task log and are appended to `nao-events.jsonl` as `task_status` events.
+
+# How can a task show output directly while it runs?
+
+Set `direct-output=#true` on tasks where live process output is part of the workflow, such as development servers or file watchers.
+
+```kdl
+task "dev-server" direct-output=#true {
+  run shell="pnpm dev"
+}
+```
+
+Direct output lines are prefixed with the task name.
+When multiple tasks run together, prefixes are padded to the same width so output remains aligned:
+
+```text
+dev-server | Vite ready at http://localhost:5173
+api        | listening on http://localhost:3000
+```
+
+The same output is still written to the normal timestamped task logs.
 
 # What parts of the format are still open?
 

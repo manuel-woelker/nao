@@ -2,6 +2,7 @@ use crate::runner::live_display::shared::LiveTaskSnapshot;
 use crate::runner::live_display::shared::LiveTaskStatus;
 use crate::runner::live_display::shared::lock_mutex;
 use crate::runner::live_display::shared::new_snapshot;
+use crate::runner::live_display::shared::render_direct_output_line;
 use crate::runner::live_display::shared::render_single_line_display;
 use crate::runner::live_display::shared::store_async_error;
 use crate::runner::live_display::shared::take_async_error;
@@ -12,6 +13,7 @@ use nao_base::result::OptionExt;
 use nao_base::result::ResultExt;
 use nao_base::shared_string::SharedString;
 use nao_engine::RunObserver;
+use nao_pal::process_output_stream::ProcessOutputStream;
 use nao_recipe::Task;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -24,6 +26,7 @@ pub struct SingleLineDisplay {
     stop: Arc<AtomicBool>,
     snapshot: Arc<Mutex<LiveTaskSnapshot>>,
     update_error: Arc<Mutex<Option<nao_base::error::NaoError>>>,
+    output_lock: Arc<Mutex<()>>,
     handle: Option<thread::JoinHandle<NaoResult<()>>>,
 }
 
@@ -32,9 +35,11 @@ impl SingleLineDisplay {
         let stop = Arc::new(AtomicBool::new(false));
         let snapshot = Arc::new(Mutex::new(new_snapshot(header, tasks)));
         let update_error = Arc::new(Mutex::new(None));
+        let output_lock = Arc::new(Mutex::new(()));
         let thread_stop = Arc::clone(&stop);
         let thread_snapshot = Arc::clone(&snapshot);
         let thread_update_error = Arc::clone(&update_error);
+        let thread_output_lock = Arc::clone(&output_lock);
         let handle = thread::spawn(move || {
             const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let mut frame_index = 0usize;
@@ -47,8 +52,14 @@ impl SingleLineDisplay {
                     )?;
                     render_single_line_display(snapshot.clone())
                 };
-                write_stdout(&format!("\r{} {}\x1b[K", FRAMES[frame_index], rendered))
-                    .context("failed to write single-line display frame")?;
+                {
+                    let _output_guard = lock_mutex(
+                        &thread_output_lock,
+                        "failed to lock single-line display output",
+                    )?;
+                    write_stdout(&format!("\r{} {}\x1b[K", FRAMES[frame_index], rendered))
+                        .context("failed to write single-line display frame")?;
+                }
                 frame_index = (frame_index + 1) % FRAMES.len();
                 thread::sleep(Duration::from_millis(80));
             }
@@ -60,8 +71,14 @@ impl SingleLineDisplay {
                 )?;
                 render_single_line_display(snapshot.clone())
             };
-            let write_result = write_stdout(&format!("\r🚀 {}\x1b[K\n", rendered))
-                .context("failed to write final single-line display frame");
+            let write_result = {
+                let _output_guard = lock_mutex(
+                    &thread_output_lock,
+                    "failed to lock single-line display output",
+                )?;
+                write_stdout(&format!("\r🚀 {}\x1b[K\n", rendered))
+                    .context("failed to write final single-line display frame")
+            };
             if let Err(error) = write_result {
                 store_async_error(
                     &thread_update_error,
@@ -76,6 +93,7 @@ impl SingleLineDisplay {
             stop,
             snapshot,
             update_error,
+            output_lock,
             handle: Some(handle),
         }
     }
@@ -148,6 +166,27 @@ impl SingleLineDisplay {
         task.status_message = None;
         task.outcome_message = outcome_message.map(SharedString::from);
     }
+
+    fn write_direct_output_line(
+        &self,
+        task_name: &str,
+        stream: ProcessOutputStream,
+        line: &str,
+    ) -> NaoResult<()> {
+        let snapshot = {
+            let snapshot = lock_mutex(
+                &self.snapshot,
+                "failed to lock single-line display snapshot",
+            )?;
+            snapshot.clone()
+        };
+        let rendered_output = render_direct_output_line(&snapshot, task_name, stream, line);
+        let _output_guard = lock_mutex(
+            &self.output_lock,
+            "failed to lock single-line display output",
+        )?;
+        write_stdout(&format!("\r\x1b[K{rendered_output}"))
+    }
 }
 
 impl RunObserver for SingleLineDisplay {
@@ -176,6 +215,17 @@ impl RunObserver for SingleLineDisplay {
             .find(|task| task.name.as_str() == task_name)
         {
             task.status_message = Some(SharedString::from(status_message));
+        }
+    }
+
+    fn on_task_output_line(&mut self, task_name: &str, stream: ProcessOutputStream, line: &str) {
+        if let Err(error) = self.write_direct_output_line(task_name, stream, line) {
+            store_async_error(
+                &self.update_error,
+                error,
+                "failed to persist single-line display output error",
+            );
+            self.stop.store(true, Ordering::Relaxed);
         }
     }
 

@@ -18,13 +18,48 @@ use nao_engine::RunEngine;
 use nao_engine::RunObserver;
 use nao_engine::RunStatus;
 use nao_pal::pal::PalHandle;
+use nao_pal::process_output_stream::ProcessOutputStream;
 use nao_recipe::LiveDisplay;
 use nao_recipe::Task;
 use std::process::ExitCode;
 
-struct NoopRunObserver;
+struct DirectOutputDisplay {
+    task_name_width: usize,
+    write_error: Option<nao_base::error::NaoError>,
+}
 
-impl RunObserver for NoopRunObserver {}
+impl DirectOutputDisplay {
+    fn new(tasks: &[Task]) -> Self {
+        Self {
+            task_name_width: task_name_width(tasks),
+            write_error: None,
+        }
+    }
+
+    fn finish(&mut self) -> NaoResult<()> {
+        match self.write_error.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+impl RunObserver for DirectOutputDisplay {
+    fn on_task_output_line(&mut self, task_name: &str, _stream: ProcessOutputStream, line: &str) {
+        if self.write_error.is_some() {
+            return;
+        }
+        let rendered = format!(
+            "{task_name:<width$} | {line}\n",
+            width = self.task_name_width
+        );
+        if let Err(error) =
+            live_display::write_stdout(&rendered).context("failed to write direct task output")
+        {
+            self.write_error = Some(error);
+        }
+    }
+}
 
 /// Describes CLI output and exit status for a runner invocation.
 pub struct RunnerOutput {
@@ -112,6 +147,7 @@ impl Runner {
             live_display::write_stdout(&render_running_line(&running_line_body))
                 .context("failed to render run header")?;
         }
+        let mut direct_output_display = DirectOutputDisplay::new(&plan.tasks);
 
         let result = if let Some(display) = line_per_task_display.as_mut() {
             self.engine.execute_planned_run_with_observer_started_at(
@@ -133,7 +169,7 @@ impl Runner {
             self.engine.execute_planned_run_with_observer_started_at(
                 recipe_path,
                 &plan,
-                &mut NoopRunObserver,
+                &mut direct_output_display,
                 run_started_at,
                 run_started_system_time,
             )?
@@ -144,6 +180,7 @@ impl Runner {
         if let Some(display) = line_per_task_display.as_mut() {
             display.finish()?;
         }
+        direct_output_display.finish()?;
         drop(single_line_display);
         drop(line_per_task_display);
         let output = match &result.status {
@@ -195,6 +232,14 @@ impl Runner {
 
         output
     }
+}
+
+fn task_name_width(tasks: &[Task]) -> usize {
+    tasks
+        .iter()
+        .map(|task| task.name.as_str().len())
+        .max()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

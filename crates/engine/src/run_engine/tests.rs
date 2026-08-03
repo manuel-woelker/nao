@@ -116,6 +116,7 @@ fn builds_shell_tasks_with_strict_bash_flags() {
     let task = nao_recipe::Task {
         name: "test".into(),
         description: None,
+        direct_output: false,
         dependencies: Vec::new(),
         run: RunSpec::Shell(SharedString::from(
             "false\necho \"This should not be executed\"",
@@ -168,6 +169,7 @@ fn builds_script_tasks_from_default_recipe_with_repository_root_working_director
     let task = nao_recipe::Task {
         name: "check-code".into(),
         description: None,
+        direct_output: false,
         dependencies: Vec::new(),
         run: RunSpec::Script(FilePath::from("./scripts/check-code.sh")),
         environment: Vec::new(),
@@ -192,6 +194,7 @@ fn builds_container_tasks_as_docker_run_commands() {
     let task = nao_recipe::Task {
         name: "image".into(),
         description: None,
+        direct_output: false,
         dependencies: Vec::new(),
         run: RunSpec::Container(nao_recipe::ContainerRunSpec {
             image: SharedString::from("alpine:3.22"),
@@ -239,6 +242,7 @@ fn builds_compose_tasks_as_docker_compose_run_commands() {
     let task = nao_recipe::Task {
         name: "integration-test".into(),
         description: None,
+        direct_output: false,
         dependencies: Vec::new(),
         run: RunSpec::Compose(nao_recipe::ComposeRunSpec {
             directory: FilePath::from(".docker"),
@@ -1320,6 +1324,135 @@ fn streams_task_status_to_observer_and_events() {
         .unwrap();
     assert!(events.contains("\"type\":\"task_status\""));
     assert!(events.contains("\"status_message\":\"count 2/2\""));
+}
+
+#[test]
+fn streams_direct_output_lines_only_for_opted_in_tasks() {
+    #[derive(Default)]
+    struct OutputObserver(Vec<(String, ProcessOutputStream, String)>);
+
+    impl RunObserver for OutputObserver {
+        fn on_task_output_line(
+            &mut self,
+            task_name: &str,
+            stream: ProcessOutputStream,
+            line: &str,
+        ) {
+            self.0.push((task_name.to_owned(), stream, line.to_owned()));
+        }
+    }
+
+    let pal = PalMock::new();
+    pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+    pal.set_file(
+        "nao.kdl",
+        r#"
+            recipe "default" {
+              task "server" direct-output=#true {
+                depends-on "build"
+                run script="./scripts/server.sh"
+              }
+
+              task "build" {
+                run script="./scripts/build.sh"
+              }
+            }
+            "#,
+    );
+    set_script_process(
+        &pal,
+        "./scripts/server.sh",
+        &[
+            b"ready at http://localhost:5173\nTask status: watching\n",
+            b"Task outcome: server ready\n",
+        ],
+        0,
+    );
+    set_script_process(&pal, "./scripts/build.sh", &[b"build output\n"], 0);
+    let engine = RunEngine::new(PalHandle::new(pal));
+    let plan = engine
+        .plan_run(&FilePath::from("nao.kdl"), &["server".to_owned()])
+        .unwrap();
+    let mut observer = OutputObserver::default();
+
+    let result = engine
+        .execute_planned_run_with_observer(&FilePath::from("nao.kdl"), &plan, &mut observer)
+        .unwrap();
+
+    assert_eq!(
+        observer.0,
+        vec![
+            (
+                "server".to_owned(),
+                ProcessOutputStream::Stdout,
+                "ready at http://localhost:5173".to_owned(),
+            ),
+            (
+                "server".to_owned(),
+                ProcessOutputStream::Stdout,
+                "Task status: watching".to_owned(),
+            ),
+            (
+                "server".to_owned(),
+                ProcessOutputStream::Stdout,
+                "Task outcome: server ready".to_owned(),
+            ),
+        ]
+    );
+    assert_eq!(
+        result.goal_outcome_message,
+        Some(SharedString::from("server ready"))
+    );
+}
+
+#[test]
+fn streams_direct_output_as_complete_lines_from_split_chunks() {
+    #[derive(Default)]
+    struct OutputObserver(Vec<String>);
+
+    impl RunObserver for OutputObserver {
+        fn on_task_output_line(
+            &mut self,
+            _task_name: &str,
+            _stream: ProcessOutputStream,
+            line: &str,
+        ) {
+            self.0.push(line.to_owned());
+        }
+    }
+
+    let pal = PalMock::new();
+    pal.set_current_system_time(SystemTime::UNIX_EPOCH);
+    pal.set_file(
+        "nao.kdl",
+        r#"
+            recipe "default" {
+              task "server" direct-output=#true {
+                run script="./scripts/server.sh"
+              }
+            }
+            "#,
+    );
+    set_script_process(
+        &pal,
+        "./scripts/server.sh",
+        &[b"ready ", b"at localhost\nnext", b" line\n"],
+        0,
+    );
+    let engine = RunEngine::new(PalHandle::new(pal));
+    let plan = engine
+        .plan_run(&FilePath::from("nao.kdl"), &["server".to_owned()])
+        .unwrap();
+    let mut observer = OutputObserver::default();
+
+    engine
+        .execute_planned_run_with_observer(&FilePath::from("nao.kdl"), &plan, &mut observer)
+        .unwrap();
+
+    assert_eq!(
+        observer.0,
+        vec!["ready at localhost".to_owned(), "next line".to_owned()]
+    );
 }
 
 #[test]

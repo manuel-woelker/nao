@@ -12,6 +12,8 @@ pub struct Task {
     pub name: TaskName,
     /// Human-readable task description.
     pub description: Option<SharedString>,
+    /// Whether process output should be streamed directly while the task runs.
+    pub direct_output: bool,
     /// Named prerequisite tasks.
     pub dependencies: Vec<DependencyName>,
     /// Task execution configuration.

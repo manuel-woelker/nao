@@ -46,6 +46,11 @@ pub(crate) enum TaskExecutionMessage {
         task_index: usize,
         message: SharedString,
     },
+    OutputLine {
+        task_index: usize,
+        stream: ProcessOutputStream,
+        line: SharedString,
+    },
     Finished {
         task_index: usize,
         output: SharedString,

@@ -127,6 +127,17 @@ impl RunEngine {
                         observer
                             .on_task_status(plan.tasks[task_index].name.as_str(), message.as_str());
                     }
+                    TaskExecutionMessage::OutputLine {
+                        task_index,
+                        stream,
+                        line,
+                    } => {
+                        observer.on_task_output_line(
+                            plan.tasks[task_index].name.as_str(),
+                            stream,
+                            line.as_str(),
+                        );
+                    }
                     TaskExecutionMessage::Finished {
                         task_index,
                         output,
@@ -355,7 +366,13 @@ fn execute_task(
     TaskExecutionResult,
     mpsc::Sender<TaskExecutionMessage>,
 ) {
-    let mut framer = LiveTaskArtifactSink::new(writer, task.name.0.clone(), task_index, sender);
+    let mut framer = LiveTaskArtifactSink::new(
+        writer,
+        task.name.0.clone(),
+        task_index,
+        sender,
+        task.direct_output,
+    );
 
     let execution_result =
         match crate::run_engine::process_command::build_process_command(&recipe_path, &task) {

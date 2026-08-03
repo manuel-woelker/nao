@@ -16,6 +16,7 @@ pub struct LiveTaskArtifactSink {
     framer: TaskOutputFramer,
     task_index: usize,
     sender: Sender<TaskExecutionMessage>,
+    direct_output: bool,
 }
 
 impl LiveTaskArtifactSink {
@@ -25,6 +26,7 @@ impl LiveTaskArtifactSink {
         task_name: SharedString,
         task_index: usize,
         sender: Sender<TaskExecutionMessage>,
+        direct_output: bool,
     ) -> Self {
         let mut framer = TaskOutputFramer::new();
         framer.push_task_heading(task_name.as_str());
@@ -34,6 +36,7 @@ impl LiveTaskArtifactSink {
             framer,
             task_index,
             sender,
+            direct_output,
         }
     }
 
@@ -57,6 +60,15 @@ impl ProcessEventSink for LiveTaskArtifactSink {
         for (timestamp, stream, line) in self.framer.log_lines_since(previous_line_count) {
             self.writer
                 .append_task_log_line(&self.task_name, *timestamp, *stream, line)?;
+            if self.direct_output {
+                self.sender
+                    .send(TaskExecutionMessage::OutputLine {
+                        task_index: self.task_index,
+                        stream: *stream,
+                        line: SharedString::from(line.as_str()),
+                    })
+                    .map_err(|_| nao_base::err!("failed to report task output"))?;
+            }
             if let Some(status_message) = line
                 .strip_prefix(TASK_STATUS_PREFIX)
                 .map(str::trim)

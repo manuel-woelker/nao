@@ -2,6 +2,7 @@ use crate::runner::live_display::shared::LiveTaskSnapshot;
 use crate::runner::live_display::shared::LiveTaskStatus;
 use crate::runner::live_display::shared::lock_mutex;
 use crate::runner::live_display::shared::new_snapshot;
+use crate::runner::live_display::shared::render_direct_output_line;
 use crate::runner::live_display::shared::render_line_per_task_display;
 use crate::runner::live_display::shared::store_async_error;
 use crate::runner::live_display::shared::take_async_error;
@@ -12,6 +13,7 @@ use nao_base::result::OptionExt;
 use nao_base::result::ResultExt;
 use nao_base::shared_string::SharedString;
 use nao_engine::RunObserver;
+use nao_pal::process_output_stream::ProcessOutputStream;
 use nao_recipe::Task;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -24,6 +26,7 @@ pub struct LinePerTaskDisplay {
     stop: Arc<AtomicBool>,
     snapshot: Arc<Mutex<LiveTaskSnapshot>>,
     update_error: Arc<Mutex<Option<nao_base::error::NaoError>>>,
+    output_lock: Arc<Mutex<()>>,
     handle: Option<thread::JoinHandle<NaoResult<()>>>,
 }
 
@@ -32,9 +35,11 @@ impl LinePerTaskDisplay {
         let snapshot = Arc::new(Mutex::new(new_snapshot(header, tasks)));
         let stop = Arc::new(AtomicBool::new(false));
         let update_error = Arc::new(Mutex::new(None));
+        let output_lock = Arc::new(Mutex::new(()));
         let thread_stop = Arc::clone(&stop);
         let thread_snapshot = Arc::clone(&snapshot);
         let thread_update_error = Arc::clone(&update_error);
+        let thread_output_lock = Arc::clone(&output_lock);
         let handle = thread::spawn(move || {
             const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let line_count = lock_mutex(
@@ -60,15 +65,27 @@ impl LinePerTaskDisplay {
                 if first_render {
                     let rendered =
                         render_line_per_task_display(snapshot.clone(), FRAMES[frame_index]);
+                    let _output_guard = lock_mutex(
+                        &thread_output_lock,
+                        "failed to lock line-per-task display output",
+                    )?;
                     write_stdout(&rendered)
                         .context("failed to write initial line-per-task display frame")?;
                     first_render = false;
                 } else if previous_snapshot.as_ref() != Some(&snapshot) {
                     let rendered =
                         render_line_per_task_display(snapshot.clone(), FRAMES[frame_index]);
+                    let _output_guard = lock_mutex(
+                        &thread_output_lock,
+                        "failed to lock line-per-task display output",
+                    )?;
                     write_stdout(&format!("\x1b[{line_count}F\x1b[J{rendered}"))
                         .context("failed to write changed line-per-task display frame")?;
                 } else {
+                    let _output_guard = lock_mutex(
+                        &thread_output_lock,
+                        "failed to lock line-per-task display output",
+                    )?;
                     write_stdout(&render_spinner_updates(&snapshot, FRAMES[frame_index]))
                         .context("failed to write line-per-task spinner frame")?;
                 }
@@ -98,6 +115,7 @@ impl LinePerTaskDisplay {
             stop,
             snapshot,
             update_error,
+            output_lock,
             handle: Some(handle),
         }
     }
@@ -170,6 +188,31 @@ impl LinePerTaskDisplay {
         task.status_message = None;
         task.outcome_message = outcome_message.map(SharedString::from);
     }
+
+    fn write_direct_output_line(
+        &self,
+        task_name: &str,
+        stream: ProcessOutputStream,
+        line: &str,
+    ) -> NaoResult<()> {
+        let snapshot = {
+            let snapshot = lock_mutex(
+                &self.snapshot,
+                "failed to lock line-per-task display snapshot",
+            )?;
+            snapshot.clone()
+        };
+        let line_count = snapshot.tasks.len() + 1;
+        let rendered_output = render_direct_output_line(&snapshot, task_name, stream, line);
+        let rendered_display = render_line_per_task_display(snapshot, "⠋");
+        let _output_guard = lock_mutex(
+            &self.output_lock,
+            "failed to lock line-per-task display output",
+        )?;
+        write_stdout(&format!(
+            "\x1b[{line_count}F\x1b[J{rendered_output}{rendered_display}"
+        ))
+    }
 }
 
 fn render_spinner_updates(snapshot: &LiveTaskSnapshot, running_symbol: &str) -> String {
@@ -213,6 +256,17 @@ impl RunObserver for LinePerTaskDisplay {
             .find(|task| task.name.as_str() == task_name)
         {
             task.status_message = Some(SharedString::from(status_message));
+        }
+    }
+
+    fn on_task_output_line(&mut self, task_name: &str, stream: ProcessOutputStream, line: &str) {
+        if let Err(error) = self.write_direct_output_line(task_name, stream, line) {
+            store_async_error(
+                &self.update_error,
+                error,
+                "failed to persist line-per-task display output error",
+            );
+            self.stop.store(true, Ordering::Relaxed);
         }
     }
 
@@ -261,9 +315,11 @@ mod tests {
     use crate::runner::live_display::shared::LiveTaskSnapshot;
     use crate::runner::live_display::shared::LiveTaskState;
     use crate::runner::live_display::shared::LiveTaskStatus;
+    use crate::runner::live_display::shared::render_direct_output_line;
     use crate::runner::live_display::shared::render_line_per_task_display;
     use expect_test::expect;
     use nao_base::shared_string::SharedString;
+    use nao_pal::process_output_stream::ProcessOutputStream;
 
     #[test]
     fn renders_line_per_task_display() {
@@ -354,6 +410,39 @@ mod tests {
         assert_eq!(
             render_spinner_updates(&snapshot, "⠙"),
             "\x1b[s\x1b[2A\r\x1b[2C⠙\x1b[u\x1b[s\x1b[1A\r\x1b[2C⠙\x1b[u"
+        );
+    }
+
+    #[test]
+    fn renders_direct_output_with_aligned_task_prefixes() {
+        let snapshot = LiveTaskSnapshot {
+            header: "Running dev".to_owned(),
+            tasks: vec![
+                LiveTaskState {
+                    name: SharedString::from("dev-server"),
+                    status: LiveTaskStatus::Running,
+                    elapsed_nanos: None,
+                    status_message: None,
+                    outcome_message: None,
+                },
+                LiveTaskState {
+                    name: SharedString::from("api"),
+                    status: LiveTaskStatus::Running,
+                    elapsed_nanos: None,
+                    status_message: None,
+                    outcome_message: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            render_direct_output_line(
+                &snapshot,
+                "api",
+                ProcessOutputStream::Stdout,
+                "listening on http://localhost:3000",
+            ),
+            "api        | listening on http://localhost:3000\n"
         );
     }
 }

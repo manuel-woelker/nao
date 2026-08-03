@@ -59,7 +59,7 @@ Recipe structure
   }}
 
 Task nodes
-  task "<name>" [description="<text>"] {{
+  task "<name>" [description="<text>"] [direct-output=#true] {{
     depends-on "<task-name>"
     run ...
     env NAME="value"
@@ -69,6 +69,10 @@ Task nodes
 Task properties
   description="<text>"
     Optional human-readable description shown in UI surfaces.
+
+  direct-output=#true
+    Stream this task's output directly while it runs.
+    Direct output lines are prefixed with aligned task names.
 
 Task child nodes
   depends-on "<task-name>"
@@ -214,6 +218,7 @@ OPTIONS:
         assert!(help.contains("OPTIONS:"));
         assert!(help.contains("Recipe file overview"));
         assert!(help.contains("Task outcomes"));
+        assert!(help.contains("direct-output=#true"));
         assert!(help.contains("nao --ci build test"));
         assert!(help.contains("run shell=\"<command>\""));
         assert!(help.contains("artifact \"<name>\" path=\"<path>\""));

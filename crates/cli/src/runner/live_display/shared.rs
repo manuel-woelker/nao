@@ -1,6 +1,7 @@
 use nao_base::err;
 use nao_base::result::NaoResult;
 use nao_base::shared_string::SharedString;
+use nao_pal::process_output_stream::ProcessOutputStream;
 use nao_recipe::Task;
 use std::io::Write as _;
 use std::sync::Mutex;
@@ -204,6 +205,21 @@ pub(super) fn render_single_line_display(snapshot: LiveTaskSnapshot) -> String {
         "{} (running: {running}, completed: {completed}, remaining: {remaining}){status_suffix}",
         snapshot.header,
     )
+}
+
+pub(super) fn render_direct_output_line(
+    snapshot: &LiveTaskSnapshot,
+    task_name: &str,
+    _stream: ProcessOutputStream,
+    line: &str,
+) -> String {
+    let task_name_width = snapshot
+        .tasks
+        .iter()
+        .map(|task| task.name.as_str().len())
+        .max()
+        .unwrap_or(task_name.len());
+    format!("{task_name:<task_name_width$} | {line}\n")
 }
 
 fn render_live_task_status(status: LiveTaskStatus, running_symbol: &str) -> String {

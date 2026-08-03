@@ -30,7 +30,7 @@ Add a task-level opt-in for direct output, then propagate live output lines thro
 
 The first implementation should:
 
-1. add a recipe-level task property such as `direct-output=true`
+1. add a recipe-level task property such as `direct-output=#true`
 2. store the setting on `nao_recipe::Task`
 3. extend the engine observer contract with an output-line callback
 4. emit output-line callbacks from `LiveTaskArtifactSink` only after lines have been framed
@@ -49,7 +49,7 @@ A task-level flag lets recipe authors opt in only where live logs are part of th
 For example:
 
 ```kdl
-task "dev-server" direct-output=true {
+task "dev-server" direct-output=#true {
   run shell="pnpm dev"
 }
 ```
@@ -140,21 +140,21 @@ The recommended order is:
 6. Add tests for parser behavior, observer behavior, and CLI rendering.
 7. Run repository-wide verification.
 
-# What concrete work items are planned?
+# What concrete work items were completed?
 
-- [ ] Add `direct_output: bool` to `nao_recipe::Task` using the existing task model style.
-- [ ] Parse optional `direct-output=true|false` task properties.
-- [ ] Add recipe parser tests for default behavior, enabled behavior, and invalid values.
-- [ ] Update recipe documentation and CLI help text with the new task property.
-- [ ] Extend `RunObserver` with a direct output callback carrying task name, stream, and line payload.
-- [ ] Emit direct output callbacks only for tasks where `direct_output` is enabled.
-- [ ] Keep `Task status: ` and `Task outcome: ` capture working for direct-output tasks.
-- [ ] Render direct output lines in the CLI with aligned fixed-width task prefixes.
-- [ ] Ensure direct output writes do not corrupt interactive live display redraws.
-- [ ] Add engine tests proving direct-output callbacks are emitted only for opted-in tasks.
-- [ ] Add runner or live display tests for aligned prefixes with different task-name lengths.
-- [ ] Add regression tests for parallel direct-output tasks producing complete, non-interleaved lines.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Add `direct_output: bool` to `nao_recipe::Task` using the existing task model style.
+- [x] Parse optional `direct-output=#true|#false` task properties.
+- [x] Add recipe parser tests for default behavior, enabled behavior, and invalid values.
+- [x] Update recipe documentation and CLI help text with the new task property.
+- [x] Extend `RunObserver` with a direct output callback carrying task name, stream, and line payload.
+- [x] Emit direct output callbacks only for tasks where `direct_output` is enabled.
+- [x] Keep `Task status: ` and `Task outcome: ` capture working for direct-output tasks.
+- [x] Render direct output lines in the CLI with aligned fixed-width task prefixes.
+- [x] Ensure direct output writes do not corrupt interactive live display redraws.
+- [x] Add engine tests proving direct-output callbacks are emitted only for opted-in tasks.
+- [x] Add runner or live display tests for aligned prefixes with different task-name lengths.
+- [x] Add regression tests for direct-output tasks producing complete, non-interleaved lines.
+- [x] Run `./scripts/check-code.sh`.
 
 # How should the work be verified?
 
@@ -167,11 +167,21 @@ Verification should include:
 - at least one test proving a normal task does not stream direct output
 - `./scripts/check-code.sh`
 
+The implementation was verified with focused recipe, engine, and CLI tests, then with `./scripts/check-code.sh`.
+The full check passed formatting, build, clippy, and 173 tests.
+
+# What was implemented?
+
+The completed implementation adds task-scoped direct output through `direct-output=#true`.
+Opted-in task output is framed into complete lines by the engine, streamed through `RunObserver`, and rendered by the CLI with fixed-width task-name prefixes computed from the planned run.
+
+The implementation keeps persisted task logs, `Task status: ` capture, `Task outcome: ` capture, CI summaries, and final run summaries on the existing paths.
+
 # What assumptions and risks matter?
 
 This plan assumes:
 
-- `direct-output=true` is the right first recipe spelling
+- `direct-output=#true` is the right first recipe spelling
 - direct output should be opt-in per task, not global
 - line-level callbacks are sufficient for server-style output
 - raw byte streaming is not needed for the first implementation

@@ -165,6 +165,17 @@ recipe "default" {
     """
   }
 
+  task "counter-direct" description="Report a counter with direct output" direct-output=#true {
+    run shell="""
+      for count in 1 2 3 4 5; do
+        printf 'counter step %s/5\n' "$count"
+        printf 'Task status: count %s/5\n' "$count"
+        sleep 1
+      done
+      printf 'Task outcome: counted to 5\n'
+    """
+  }
+
   task "slow2" description="Sleep for 2 seconds" {
     run shell="""
       sleep 2

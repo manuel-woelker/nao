@@ -237,6 +237,8 @@ fn parse_recipe_config(source: &str, node: &KdlNode) -> Result<RecipeConfig, Rec
 fn parse_task(source: &str, node: &KdlNode) -> Result<Task, RecipeError> {
     let name = TaskName(parse_required_string_argument(source, node, "task name")?);
     let description = parse_optional_string_property(source, node, "description")?;
+    let direct_output =
+        parse_optional_bool_property(source, node, "direct-output")?.unwrap_or(false);
     let children = node.children().ok_or_else(|| {
         recipe_error_for_node(
             source,
@@ -299,6 +301,7 @@ fn parse_task(source: &str, node: &KdlNode) -> Result<Task, RecipeError> {
     Ok(Task {
         name,
         description,
+        direct_output,
         dependencies,
         run,
         environment,
@@ -631,6 +634,38 @@ fn parse_optional_usize_property(
     }
 }
 
+fn parse_optional_bool_property(
+    source: &str,
+    node: &KdlNode,
+    property_name: &str,
+) -> Result<Option<bool>, RecipeError> {
+    let mut matching = node
+        .entries()
+        .iter()
+        .filter(|entry| entry.name().map(|name| name.value()) == Some(property_name));
+
+    let Some(entry) = matching.next() else {
+        return Ok(None);
+    };
+
+    if matching.next().is_some() {
+        return Err(recipe_error_for_entry(
+            source,
+            entry,
+            format!("property `{property_name}` must not be repeated"),
+        ));
+    }
+
+    match entry.value() {
+        KdlValue::Bool(value) => Ok(Some(*value)),
+        _ => Err(recipe_error_for_entry(
+            source,
+            entry,
+            format!("property `{property_name}` must be a boolean value"),
+        )),
+    }
+}
+
 fn parse_string_value(
     source: &str,
     entry: &KdlEntry,
@@ -760,6 +795,7 @@ mod tests {
             recipe.tasks[0].description,
             Some(SharedString::from("Build the workspace"))
         );
+        assert!(!recipe.tasks[0].direct_output);
         assert_eq!(recipe.tasks[2].dependencies[0].as_str(), "build");
         assert_eq!(
             recipe.tasks[3].environment[0].name,
@@ -903,6 +939,58 @@ mod tests {
         .unwrap();
 
         assert_eq!(recipe.config.max_parallel_tasks, None);
+    }
+
+    #[test]
+    fn defaults_task_direct_output_to_false() {
+        let recipe = parse_recipe(
+            r#"
+            recipe "default" {
+              task "build" {
+                run shell="cargo build"
+              }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(!recipe.tasks[0].direct_output);
+    }
+
+    #[test]
+    fn parses_task_direct_output_property() {
+        let recipe = parse_recipe(
+            r#"
+            recipe "default" {
+              task "dev-server" direct-output=#true {
+                run shell="pnpm dev"
+              }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(recipe.tasks[0].direct_output);
+    }
+
+    #[test]
+    fn rejects_invalid_task_direct_output_property_type() {
+        let error = parse_recipe(
+            r#"
+            recipe "default" {
+              task "dev-server" direct-output="yes" {
+                run shell="pnpm dev"
+              }
+            }
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("property `direct-output` must be a boolean value")
+        );
     }
 
     #[test]
