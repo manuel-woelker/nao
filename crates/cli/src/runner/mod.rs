@@ -29,6 +29,7 @@ use nao_recipe::Task;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -80,6 +81,7 @@ impl RunObserver for DirectOutputDisplay {
 
 struct CliRestartController {
     current_token: Arc<Mutex<Option<CancellationToken>>>,
+    interrupt_state: Arc<CliInterruptState>,
     restart_reason: Arc<Mutex<Option<RestartReason>>>,
     stop: Arc<AtomicBool>,
     keyboard_handle: Option<thread::JoinHandle<NaoResult<()>>>,
@@ -89,6 +91,7 @@ struct CliRestartController {
 impl CliRestartController {
     fn start(pal: PalHandle, keyboard_enabled: bool) -> NaoResult<Self> {
         let current_token = Arc::new(Mutex::new(None::<CancellationToken>));
+        let interrupt_state = install_cli_interrupt_handler()?;
         let restart_reason = Arc::new(Mutex::new(None));
         let stop = Arc::new(AtomicBool::new(false));
         let marker_modified_time = ensure_restart_marker(&*pal)?;
@@ -103,6 +106,7 @@ impl CliRestartController {
         if !keyboard_enabled {
             return Ok(Self {
                 current_token,
+                interrupt_state,
                 restart_reason,
                 stop,
                 keyboard_handle: None,
@@ -113,6 +117,7 @@ impl CliRestartController {
         enable_raw_mode().context("failed to enable raw mode for CLI restart shortcut")?;
         live_display::set_raw_mode_output(true);
         let thread_current_token = Arc::clone(&current_token);
+        let thread_interrupt_state = Arc::clone(&interrupt_state);
         let thread_restart_reason = Arc::clone(&restart_reason);
         let thread_stop = Arc::clone(&stop);
         let keyboard_handle = thread::spawn(move || {
@@ -135,6 +140,10 @@ impl CliRestartController {
                         &thread_restart_reason,
                         RestartReason::Keyboard,
                     )?;
+                } else if key_event.code == KeyCode::Char('c')
+                    && key_event.modifiers == KeyModifiers::CONTROL
+                {
+                    thread_interrupt_state.request_interrupt()?;
                 }
             }
             Ok(())
@@ -142,6 +151,7 @@ impl CliRestartController {
 
         Ok(Self {
             current_token,
+            interrupt_state,
             restart_reason,
             stop,
             keyboard_handle: Some(keyboard_handle),
@@ -153,7 +163,8 @@ impl CliRestartController {
         *self
             .current_token
             .lock()
-            .map_err(|_| nao_base::err!("failed to lock CLI restart token"))? = Some(token);
+            .map_err(|_| nao_base::err!("failed to lock CLI restart token"))? = Some(token.clone());
+        self.interrupt_state.set_current_token(token)?;
         Ok(())
     }
 
@@ -162,6 +173,7 @@ impl CliRestartController {
             .current_token
             .lock()
             .map_err(|_| nao_base::err!("failed to lock CLI restart token"))? = None;
+        self.interrupt_state.clear_current_token()?;
         Ok(())
     }
 
@@ -171,6 +183,10 @@ impl CliRestartController {
             .lock()
             .map_err(|_| nao_base::err!("failed to lock CLI restart reason"))?
             .take())
+    }
+
+    fn take_interrupt_requested(&self) -> bool {
+        self.interrupt_state.take_interrupt_requested()
     }
 
     fn stop(&mut self) -> NaoResult<()> {
@@ -214,6 +230,77 @@ impl RestartReason {
             Self::Keyboard => "Restarting run after Ctrl+R\n",
             Self::Marker => "Restarting run after nao --restart\n",
         }
+    }
+}
+
+struct CliInterruptState {
+    current_token: Mutex<Option<CancellationToken>>,
+    interrupt_requested: AtomicBool,
+}
+
+impl CliInterruptState {
+    fn new() -> Self {
+        Self {
+            current_token: Mutex::new(None),
+            interrupt_requested: AtomicBool::new(false),
+        }
+    }
+
+    fn set_current_token(&self, token: CancellationToken) -> NaoResult<()> {
+        *self
+            .current_token
+            .lock()
+            .map_err(|_| nao_base::err!("failed to lock CLI interrupt token"))? = Some(token);
+        self.interrupt_requested.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn clear_current_token(&self) -> NaoResult<()> {
+        *self
+            .current_token
+            .lock()
+            .map_err(|_| nao_base::err!("failed to lock CLI interrupt token"))? = None;
+        Ok(())
+    }
+
+    fn request_interrupt(&self) -> NaoResult<()> {
+        self.interrupt_requested.store(true, Ordering::SeqCst);
+        if let Some(token) = self
+            .current_token
+            .lock()
+            .map_err(|_| nao_base::err!("failed to lock CLI interrupt token"))?
+            .as_ref()
+        {
+            token.cancel();
+        }
+        Ok(())
+    }
+
+    fn take_interrupt_requested(&self) -> bool {
+        self.interrupt_requested.swap(false, Ordering::SeqCst)
+    }
+}
+
+static CLI_INTERRUPT_STATE: OnceLock<Arc<CliInterruptState>> = OnceLock::new();
+
+fn install_cli_interrupt_handler() -> NaoResult<Arc<CliInterruptState>> {
+    if let Some(state) = CLI_INTERRUPT_STATE.get() {
+        return Ok(Arc::clone(state));
+    }
+
+    let state = Arc::new(CliInterruptState::new());
+    let handler_state = Arc::clone(&state);
+    let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGINT])
+        .context("failed to install CLI interrupt handler for task cleanup")?;
+    thread::spawn(move || {
+        for _signal in signals.forever() {
+            let _ = handler_state.request_interrupt();
+        }
+    });
+
+    match CLI_INTERRUPT_STATE.set(Arc::clone(&state)) {
+        Ok(()) => Ok(state),
+        Err(_) => Ok(Arc::clone(CLI_INTERRUPT_STATE.get().unwrap())),
     }
 }
 
@@ -304,13 +391,20 @@ impl Runner {
             let run_started_at = self.pal.now();
             let run_started_system_time = self.pal.system_time();
             let mut ci_display = CiDisplay::default();
-            let result = self.engine.execute_planned_run_with_observer_started_at(
-                recipe_path,
-                &plan,
-                &mut ci_display,
-                run_started_at,
-                run_started_system_time,
-            )?;
+            let interrupt_state = install_cli_interrupt_handler()?;
+            let cancellation_token = CancellationToken::new();
+            interrupt_state.set_current_token(cancellation_token.clone())?;
+            let result = self
+                .engine
+                .execute_planned_run_with_observer_started_at_cancellable(
+                    recipe_path,
+                    &plan,
+                    &mut ci_display,
+                    run_started_at,
+                    run_started_system_time,
+                    &cancellation_token,
+                )?;
+            interrupt_state.clear_current_token()?;
             ci_display.finish()?;
 
             return Ok(RunnerOutput {
@@ -337,6 +431,9 @@ impl Runner {
                 &cancellation_token,
             )?;
             restart_controller.clear_current_token()?;
+            if restart_controller.take_interrupt_requested() {
+                break result;
+            }
             if let Some(restart_reason) = restart_controller.take_restart_reason()? {
                 live_display::write_stdout(restart_reason.status_message())
                     .context("failed to render CLI restart status")?;
@@ -482,10 +579,12 @@ fn task_name_width(tasks: &[Task]) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use super::CliInterruptState;
     use super::Runner;
     use expect_test::expect;
     use nao_base::file_path::FilePath;
     use nao_base::timestamp::Timestamp;
+    use nao_pal::cancellation_token::CancellationToken;
     use nao_pal::pal::Pal;
     use nao_pal::pal::PalHandle;
     use nao_pal::pal_mock::PalMock;
@@ -590,6 +689,19 @@ mod tests {
             },
             delay,
         );
+    }
+
+    #[test]
+    fn cli_interrupt_state_cancels_current_token() {
+        let state = CliInterruptState::new();
+        let token = CancellationToken::new();
+
+        state.set_current_token(token.clone()).unwrap();
+        state.request_interrupt().unwrap();
+
+        assert!(token.is_cancelled());
+        assert!(state.take_interrupt_requested());
+        assert!(!state.take_interrupt_requested());
     }
 
     #[test]

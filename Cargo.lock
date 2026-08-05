@@ -922,6 +922,7 @@ dependencies = [
  "nao-recipe",
  "nao-tui",
  "shadow-rs",
+ "signal-hook",
  "xflags",
 ]
 
