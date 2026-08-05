@@ -947,6 +947,7 @@ version = "0.1.6"
 dependencies = [
  "expect-test",
  "ignore",
+ "libc",
  "nao-base",
  "notify-debouncer-full",
  "relative-path",

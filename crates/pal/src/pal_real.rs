@@ -28,9 +28,11 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
+
+const TERMINATION_GRACE_PERIOD: Duration = Duration::from_millis(500);
 
 pub struct PalReal {
     base_path: PathBuf,
@@ -105,6 +107,7 @@ impl PalReal {
         child_command.args(command.arguments.iter().map(|argument| argument.as_str()));
         child_command.stdout(Stdio::piped());
         child_command.stderr(Stdio::piped());
+        configure_child_process(&mut child_command);
 
         if let Some(working_directory) = &command.working_directory {
             child_command.current_dir(self.resolve_working_directory(working_directory)?);
@@ -151,7 +154,8 @@ impl PalReal {
         let mut finished_at = started_at;
         let mut exit_code = None;
         let mut exit_observed = false;
-        let mut kill_requested = false;
+        let mut termination_started_at = None;
+        let mut force_kill_requested = false;
 
         while !exit_observed || stream_closes < expected_stream_closes {
             tokio::select! {
@@ -168,14 +172,27 @@ impl PalReal {
                     })?;
                 }
                 _ = tokio::time::sleep(Duration::from_millis(20)), if !exit_observed => {
-                    if cancellation_token.is_cancelled() && !kill_requested {
-                        child.start_kill().with_context(|| {
+                    if cancellation_token.is_cancelled() && termination_started_at.is_none() {
+                        terminate_child(&mut child).with_context(|| {
                             format!(
                                 "Unable to terminate process '{}'",
                                 command.executable.as_str()
                             )
                         })?;
-                        kill_requested = true;
+                        termination_started_at = Some(Instant::now());
+                    }
+
+                    if let Some(termination_started_at) = termination_started_at
+                        && !force_kill_requested
+                        && termination_started_at.elapsed() >= TERMINATION_GRACE_PERIOD
+                    {
+                        force_kill_child(&mut child).with_context(|| {
+                            format!(
+                                "Unable to force-kill process '{}'",
+                                command.executable.as_str()
+                            )
+                        })?;
+                        force_kill_requested = true;
                     }
 
                     if let Some(exit_status) = child.try_wait().with_context(|| {
@@ -202,6 +219,59 @@ impl PalReal {
             exit_code,
         })
     }
+}
+
+#[cfg(unix)]
+fn configure_child_process(command: &mut Command) {
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn configure_child_process(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn terminate_child(child: &mut Child) -> NaoResult<()> {
+    signal_child_process_group(child, libc::SIGTERM)
+}
+
+#[cfg(unix)]
+fn force_kill_child(child: &mut Child) -> NaoResult<()> {
+    signal_child_process_group(child, libc::SIGKILL)
+}
+
+#[cfg(unix)]
+fn signal_child_process_group(child: &mut Child, signal: libc::c_int) -> NaoResult<()> {
+    let process_id = child
+        .id()
+        .ok_or_else(|| nao_base::err!("child process id is unavailable"))?;
+    let process_group_id = -(process_id as libc::pid_t);
+    let result = unsafe { libc::kill(process_group_id, signal) };
+    if result == -1 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn terminate_child(child: &mut Child) -> NaoResult<()> {
+    child.start_kill()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn force_kill_child(_child: &mut Child) -> NaoResult<()> {
+    Ok(())
 }
 
 impl Pal for PalReal {
@@ -431,12 +501,15 @@ async fn read_stream<R>(
 #[cfg(test)]
 mod tests {
     use super::PalReal;
+    use crate::cancellation_token::CancellationToken;
     use crate::pal::Pal;
     use crate::process_command::ProcessCommand;
     use crate::process_event::ProcessEvent;
     use crate::process_event_sink::ProcessEventSink;
     use nao_base::result::NaoResult;
     use nao_base::shared_string::SharedString;
+    use std::thread;
+    use std::time::Duration;
 
     #[derive(Default)]
     struct RecordingSink {
@@ -496,5 +569,70 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, ProcessEvent::Exited(_)))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_terminates_subchild_process_group() {
+        let pid_file = std::env::temp_dir().join(format!(
+            "nao-pal-subchild-{}-{}.pid",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&pid_file);
+        let command = ProcessCommand {
+            executable: SharedString::from("sh"),
+            arguments: vec![
+                SharedString::from("-c"),
+                SharedString::from(format!(
+                    "sleep 30 & printf '%s\\n' \"$!\" > {}; wait",
+                    pid_file.display()
+                )),
+            ],
+            working_directory: None,
+            environment: Vec::new(),
+        };
+        let cancellation_token = CancellationToken::new();
+        let worker_cancellation_token = cancellation_token.clone();
+        let handle = thread::spawn(move || {
+            let pal = PalReal::new().unwrap();
+            let mut sink = RecordingSink::default();
+            pal.run_process_cancellable(&command, &mut sink, &worker_cancellation_token)
+                .unwrap()
+        });
+
+        for _ in 0..100 {
+            if pid_file.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let sleep_pid = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse::<libc::pid_t>()
+            .unwrap();
+
+        cancellation_token.cancel();
+        let result = handle.join().unwrap();
+
+        assert_ne!(result.exit_code, Some(0));
+        for _ in 0..100 {
+            if !process_exists(sleep_pid) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!process_exists(sleep_pid));
+        let _ = std::fs::remove_file(&pid_file);
+    }
+
+    #[cfg(unix)]
+    fn process_exists(process_id: libc::pid_t) -> bool {
+        let result = unsafe { libc::kill(process_id, 0) };
+        result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
 }

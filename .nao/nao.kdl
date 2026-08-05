@@ -80,7 +80,7 @@ recipe "default" {
     run script="./scripts/check-code.sh"
   }
 
-  task "install-nao" description="Install the nao CLI from this checkout" {
+  task "install" description="Install the nao CLI from this checkout" {
     run shell="""
       cargo install --path crates/cli --force
       printf 'Task outcome: nao CLI installed\n'

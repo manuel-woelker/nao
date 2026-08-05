@@ -10,6 +10,7 @@ repository = "https://github.com/manuel-woelker/nao"
 nao-base = { path = "../base", version = "0.1.6" }
 expect-test = {workspace = true}
 ignore = {workspace = true}
+libc = {workspace = true}
 notify-debouncer-full = {workspace = true}
 relative-path = {workspace = true}
 tokio = { version = "1.44.2", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
