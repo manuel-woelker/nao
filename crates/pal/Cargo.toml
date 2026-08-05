@@ -9,6 +9,7 @@ repository = "https://github.com/manuel-woelker/nao"
 [dependencies]
 nao-base = { path = "../base", version = "0.1.6" }
 expect-test = {workspace = true}
+filetime = {workspace = true}
 ignore = {workspace = true}
 libc = {workspace = true}
 notify-debouncer-full = {workspace = true}

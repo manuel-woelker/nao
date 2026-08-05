@@ -20,6 +20,9 @@ pub trait Pal: Debug + Sync + Send + 'static {
     /// Does the file exist?
     fn file_exists(&self, path: &FilePath) -> NaoResult<bool>;
 
+    /// Returns the last modification time for a file.
+    fn file_modified_time(&self, path: &FilePath) -> NaoResult<SystemTime>;
+
     /// Read a file, the path is relative to the base directory
     fn read_file(&self, path: &FilePath) -> NaoResult<Box<dyn ReadSeek + 'static>>;
 
@@ -61,6 +64,9 @@ pub trait Pal: Debug + Sync + Send + 'static {
 
     /// Append bytes to a file, creating it if it does not exist.
     fn append_file(&self, path: &FilePath, content: &[u8]) -> NaoResult<()>;
+
+    /// Updates a file's modification time, creating the file when it does not exist.
+    fn touch_file(&self, path: &FilePath) -> NaoResult<()>;
 
     /// Returns whether normal process output targets an interactive terminal.
     fn is_interactive_terminal(&self) -> bool;

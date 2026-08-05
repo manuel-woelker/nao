@@ -2,6 +2,8 @@ mod ci_display;
 mod live_display;
 mod rendering;
 
+use crate::restart_marker::ensure_restart_marker;
+use crate::restart_marker::restart_marker_modified_time;
 use crate::runner::ci_display::CiDisplay;
 use crate::runner::live_display::LinePerTaskDisplay;
 use crate::runner::live_display::SingleLineDisplay;
@@ -30,6 +32,13 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
+use std::time::SystemTime;
+
+#[cfg(not(test))]
+const RESTART_MARKER_POLL_INTERVAL: Duration = Duration::from_millis(1000);
+
+#[cfg(test)]
+const RESTART_MARKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 struct DirectOutputDisplay {
     task_name_width: usize,
@@ -71,32 +80,42 @@ impl RunObserver for DirectOutputDisplay {
 
 struct CliRestartController {
     current_token: Arc<Mutex<Option<CancellationToken>>>,
-    restart_requested: Arc<AtomicBool>,
+    restart_reason: Arc<Mutex<Option<RestartReason>>>,
     stop: Arc<AtomicBool>,
-    handle: Option<thread::JoinHandle<NaoResult<()>>>,
+    keyboard_handle: Option<thread::JoinHandle<NaoResult<()>>>,
+    marker_handle: Option<thread::JoinHandle<NaoResult<()>>>,
 }
 
 impl CliRestartController {
-    fn start(enabled: bool) -> NaoResult<Self> {
+    fn start(pal: PalHandle, keyboard_enabled: bool) -> NaoResult<Self> {
         let current_token = Arc::new(Mutex::new(None::<CancellationToken>));
-        let restart_requested = Arc::new(AtomicBool::new(false));
+        let restart_reason = Arc::new(Mutex::new(None));
         let stop = Arc::new(AtomicBool::new(false));
+        let marker_modified_time = ensure_restart_marker(&*pal)?;
+        let marker_handle = Some(start_restart_marker_listener(
+            pal,
+            marker_modified_time,
+            Arc::clone(&current_token),
+            Arc::clone(&restart_reason),
+            Arc::clone(&stop),
+        ));
 
-        if !enabled {
+        if !keyboard_enabled {
             return Ok(Self {
                 current_token,
-                restart_requested,
+                restart_reason,
                 stop,
-                handle: None,
+                keyboard_handle: None,
+                marker_handle,
             });
         }
 
         enable_raw_mode().context("failed to enable raw mode for CLI restart shortcut")?;
         live_display::set_raw_mode_output(true);
         let thread_current_token = Arc::clone(&current_token);
-        let thread_restart_requested = Arc::clone(&restart_requested);
+        let thread_restart_reason = Arc::clone(&restart_reason);
         let thread_stop = Arc::clone(&stop);
-        let handle = thread::spawn(move || {
+        let keyboard_handle = thread::spawn(move || {
             while !thread_stop.load(Ordering::Relaxed) {
                 if !crossterm::event::poll(Duration::from_millis(50))
                     .context("failed to poll CLI keyboard events")?
@@ -111,14 +130,11 @@ impl CliRestartController {
                 if key_event.code == KeyCode::Char('r')
                     && key_event.modifiers == KeyModifiers::CONTROL
                 {
-                    thread_restart_requested.store(true, Ordering::SeqCst);
-                    if let Some(token) = thread_current_token
-                        .lock()
-                        .map_err(|_| nao_base::err!("failed to lock CLI restart token"))?
-                        .as_ref()
-                    {
-                        token.cancel();
-                    }
+                    request_restart(
+                        &thread_current_token,
+                        &thread_restart_reason,
+                        RestartReason::Keyboard,
+                    )?;
                 }
             }
             Ok(())
@@ -126,9 +142,10 @@ impl CliRestartController {
 
         Ok(Self {
             current_token,
-            restart_requested,
+            restart_reason,
             stop,
-            handle: Some(handle),
+            keyboard_handle: Some(keyboard_handle),
+            marker_handle,
         })
     }
 
@@ -137,7 +154,6 @@ impl CliRestartController {
             .current_token
             .lock()
             .map_err(|_| nao_base::err!("failed to lock CLI restart token"))? = Some(token);
-        self.restart_requested.store(false, Ordering::SeqCst);
         Ok(())
     }
 
@@ -149,13 +165,26 @@ impl CliRestartController {
         Ok(())
     }
 
-    fn take_restart_requested(&self) -> bool {
-        self.restart_requested.swap(false, Ordering::SeqCst)
+    fn take_restart_reason(&self) -> NaoResult<Option<RestartReason>> {
+        Ok(self
+            .restart_reason
+            .lock()
+            .map_err(|_| nao_base::err!("failed to lock CLI restart reason"))?
+            .take())
     }
 
     fn stop(&mut self) -> NaoResult<()> {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
+        if let Some(handle) = &self.marker_handle {
+            handle.thread().unpark();
+        }
+        if let Some(handle) = self.marker_handle.take() {
+            let result = handle
+                .join()
+                .map_err(|_| nao_base::err!("CLI restart marker listener thread panicked"))?;
+            result?;
+        }
+        if let Some(handle) = self.keyboard_handle.take() {
             let result = handle
                 .join()
                 .map_err(|_| nao_base::err!("CLI restart listener thread panicked"))?;
@@ -171,6 +200,62 @@ impl Drop for CliRestartController {
     fn drop(&mut self) {
         let _ = self.stop();
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RestartReason {
+    Keyboard,
+    Marker,
+}
+
+impl RestartReason {
+    fn status_message(self) -> &'static str {
+        match self {
+            Self::Keyboard => "Restarting run after Ctrl+R\n",
+            Self::Marker => "Restarting run after nao --restart\n",
+        }
+    }
+}
+
+fn start_restart_marker_listener(
+    pal: PalHandle,
+    mut remembered_modified_time: SystemTime,
+    current_token: Arc<Mutex<Option<CancellationToken>>>,
+    restart_reason: Arc<Mutex<Option<RestartReason>>>,
+    stop: Arc<AtomicBool>,
+) -> thread::JoinHandle<NaoResult<()>> {
+    thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            thread::park_timeout(RESTART_MARKER_POLL_INTERVAL);
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let modified_time = restart_marker_modified_time(&*pal)?;
+            if modified_time != remembered_modified_time {
+                remembered_modified_time = modified_time;
+                request_restart(&current_token, &restart_reason, RestartReason::Marker)?;
+            }
+        }
+        Ok(())
+    })
+}
+
+fn request_restart(
+    current_token: &Mutex<Option<CancellationToken>>,
+    restart_reason: &Mutex<Option<RestartReason>>,
+    reason: RestartReason,
+) -> NaoResult<()> {
+    *restart_reason
+        .lock()
+        .map_err(|_| nao_base::err!("failed to lock CLI restart reason"))? = Some(reason);
+    if let Some(token) = current_token
+        .lock()
+        .map_err(|_| nao_base::err!("failed to lock CLI restart token"))?
+        .as_ref()
+    {
+        token.cancel();
+    }
+    Ok(())
 }
 
 /// Describes CLI output and exit status for a runner invocation.
@@ -238,7 +323,7 @@ impl Runner {
         }
 
         let mut restart_controller =
-            CliRestartController::start(self.pal.is_interactive_terminal())?;
+            CliRestartController::start(self.pal.clone(), self.pal.is_interactive_terminal())?;
         let result = loop {
             let run_started_at = self.pal.now();
             let run_started_system_time = self.pal.system_time();
@@ -252,8 +337,8 @@ impl Runner {
                 &cancellation_token,
             )?;
             restart_controller.clear_current_token()?;
-            if restart_controller.take_restart_requested() {
-                live_display::write_stdout("Restarting run after Ctrl+R\n")
+            if let Some(restart_reason) = restart_controller.take_restart_reason()? {
+                live_display::write_stdout(restart_reason.status_message())
                     .context("failed to render CLI restart status")?;
                 continue;
             }
@@ -401,6 +486,7 @@ mod tests {
     use expect_test::expect;
     use nao_base::file_path::FilePath;
     use nao_base::timestamp::Timestamp;
+    use nao_pal::pal::Pal;
     use nao_pal::pal::PalHandle;
     use nao_pal::pal_mock::PalMock;
     use nao_pal::process_command::ProcessCommand;
@@ -411,6 +497,9 @@ mod tests {
     use nao_pal::process_result::ProcessResult;
     use nao_pal::process_stream_closed_event::ProcessStreamClosedEvent;
     use std::process::ExitCode;
+    use std::thread;
+    use std::time::Duration;
+    use std::time::SystemTime;
 
     fn test_runner() -> (Runner, PalMock) {
         let pal = PalMock::new();
@@ -467,6 +556,42 @@ mod tests {
         );
     }
 
+    fn set_script_process_with_delay(pal: &PalMock, script: &str, bytes: &[u8], delay: Duration) {
+        pal.set_process_execution_with_delay(
+            ProcessCommand {
+                executable: script.into(),
+                arguments: Vec::new(),
+                working_directory: Some(FilePath::from(".")),
+                environment: Vec::new(),
+            },
+            vec![
+                ProcessEvent::Output(ProcessOutputEvent {
+                    timestamp: Timestamp::new(1),
+                    stream: ProcessOutputStream::Stdout,
+                    bytes: bytes.to_vec(),
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(2),
+                    stream: ProcessOutputStream::Stdout,
+                }),
+                ProcessEvent::StreamClosed(ProcessStreamClosedEvent {
+                    timestamp: Timestamp::new(3),
+                    stream: ProcessOutputStream::Stderr,
+                }),
+                ProcessEvent::Exited(ProcessExitedEvent {
+                    timestamp: Timestamp::new(4),
+                    exit_code: Some(0),
+                }),
+            ],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(4),
+                exit_code: Some(0),
+            },
+            delay,
+        );
+    }
+
     #[test]
     fn renders_task_list() {
         let (runner, _) = test_runner();
@@ -518,6 +643,46 @@ mod tests {
         "#]]
         .assert_eq(&nao_base::unansi(&output.output));
         assert_eq!(output.exit_code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn restarts_when_restart_marker_mtime_changes() {
+        let (runner, pal) = test_runner();
+        set_script_process_with_delay(
+            &pal,
+            "./scripts/build.sh",
+            b"build ok\n",
+            Duration::from_millis(50),
+        );
+        pal.set_current_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(1));
+        let touch_pal = pal.clone();
+        let touch_handle = thread::spawn(move || {
+            while touch_pal.read_file_bytes(".nao/internal/restart").is_none() {
+                thread::sleep(Duration::from_millis(1));
+            }
+            touch_pal.set_current_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(2));
+            touch_pal
+                .touch_file(&FilePath::from(".nao/internal/restart"))
+                .unwrap();
+        });
+
+        let output = runner
+            .execute(
+                &FilePath::from("nao.kdl"),
+                false,
+                false,
+                &["build".to_owned()],
+            )
+            .unwrap();
+        touch_handle.join().unwrap();
+
+        assert_eq!(output.exit_code, ExitCode::SUCCESS);
+        assert_eq!(
+            pal.get_effects()
+                .matches("RUN PROCESS: ./scripts/build.sh")
+                .count(),
+            2
+        );
     }
 
     #[test]

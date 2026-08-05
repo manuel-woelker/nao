@@ -20,6 +20,8 @@ Default behavior
   If `nao` runs without an interactive terminal, it prints text help instead of opening the TUI.
   Running `nao build test` executes the requested goal tasks and any dependencies they need.
   During an interactive CLI run, press Ctrl+R to restart the same requested task graph.
+  Running `nao --restart` touches `.nao/internal/restart`; active CLI runs in the workspace
+  poll that marker about once per second and restart when it changes.
   Running `nao --list` prints the task names defined in the selected recipe file.
   Running `nao --ci build test` disables interactive progress, prints task lifecycle updates,
   then emits executed task logs and a final run summary.
@@ -160,6 +162,9 @@ Workflow examples
   Open the TUI with a custom recipe:
     nao --tui --config configs/ci.kdl
 
+  Request restart of active CLI runs in this workspace:
+    nao --restart
+
 "#,
         version = render_version(&load_version_metadata().unwrap_or(VersionMetadata {
             last_commit_date: "unknown".into(),
@@ -222,6 +227,9 @@ OPTIONS:
         assert!(help.contains("direct-output=#true"));
         assert!(help.contains("nao --ci build test"));
         assert!(help.contains("Ctrl+R to restart"));
+        assert!(help.contains("nao --restart"));
+        assert!(help.contains(".nao/internal/restart"));
+        assert!(help.contains("poll that marker about once per second"));
         assert!(help.contains("run shell=\"<command>\""));
         assert!(help.contains("artifact \"<name>\" path=\"<path>\""));
         assert!(help.contains("nao --init"));

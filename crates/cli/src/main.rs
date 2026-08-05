@@ -3,6 +3,7 @@ mod help_text;
 mod recipe_init;
 mod recipe_paths;
 mod request_validation;
+mod restart_marker;
 mod runner;
 mod version_metadata;
 
@@ -24,6 +25,8 @@ xflags::xflags! {
         optional --ci
         /// Print build-time version metadata.
         optional --version
+        /// Request restart of a currently running nao process in this workspace.
+        optional --restart
         /// Load a recipe file other than the default `.nao/nao.kdl`.
         optional --config config: PathBuf
         /// Task names or wildcard selectors to execute.
@@ -97,6 +100,20 @@ mod tests {
         let flags = Nao::from_vec(vec![OsString::from("--version")]).unwrap();
 
         assert!(flags.version);
+        assert!(!flags.restart);
+        assert!(!flags.init);
+        assert!(!flags.list);
+        assert!(!flags.tui);
+        assert_eq!(flags.config, None);
+        assert!(flags.task_name.is_empty());
+    }
+
+    #[test]
+    fn parses_restart_flag() {
+        let flags = Nao::from_vec(vec![OsString::from("--restart")]).unwrap();
+
+        assert!(flags.restart);
+        assert!(!flags.version);
         assert!(!flags.init);
         assert!(!flags.list);
         assert!(!flags.tui);

@@ -279,6 +279,12 @@ impl Pal for PalReal {
         Ok(std::fs::exists(self.resolve_path(path)?)?)
     }
 
+    fn file_modified_time(&self, path: &FilePath) -> NaoResult<SystemTime> {
+        std::fs::metadata(self.resolve_path(path)?)
+            .and_then(|metadata| metadata.modified())
+            .with_context(|| format!("Unable to read modification time for '{}'", path))
+    }
+
     fn read_file(&self, path: &FilePath) -> NaoResult<Box<dyn ReadSeek + 'static>> {
         Ok(Box::new(
             File::open(self.resolve_path(path)?)
@@ -410,6 +416,23 @@ impl Pal for PalReal {
             .with_context(|| format!("Unable to open file '{}' for append", path))?;
         std::io::Write::write_all(&mut file, content)
             .with_context(|| format!("Unable to append file '{}'", path))?;
+        Ok(())
+    }
+
+    fn touch_file(&self, path: &FilePath) -> NaoResult<()> {
+        let resolved_path = self.resolve_process_path(path)?;
+        if let Some(parent) = resolved_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Unable to create parent directory for '{}'", path))?;
+        }
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&resolved_path)
+            .with_context(|| format!("Unable to open file '{}' for touching", path))?;
+        let now = filetime::FileTime::from_system_time(SystemTime::now());
+        filetime::set_file_mtime(&resolved_path, now)
+            .with_context(|| format!("Unable to touch file '{}'", path))?;
         Ok(())
     }
 

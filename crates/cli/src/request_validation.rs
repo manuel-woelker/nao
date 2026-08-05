@@ -3,7 +3,12 @@ use nao_base::err;
 use nao_base::result::NaoResult;
 
 pub(crate) fn is_default_action_request(flags: &Nao) -> bool {
-    !flags.version && !flags.init && !flags.list && flags.task_name.is_empty() && !flags.ci
+    !flags.version
+        && !flags.init
+        && !flags.list
+        && !flags.restart
+        && flags.task_name.is_empty()
+        && !flags.ci
 }
 
 pub(crate) fn should_run_tui(flags: &Nao, interactive_terminal: bool) -> bool {
@@ -27,9 +32,37 @@ pub(crate) fn validate_ci_request(flags: &Nao) -> NaoResult<()> {
     Ok(())
 }
 
+pub(crate) fn validate_restart_request(flags: &Nao) -> NaoResult<()> {
+    if flags.init {
+        return Err(err!("--restart cannot be combined with --init"));
+    }
+    if flags.list {
+        return Err(err!("--restart cannot be combined with --list"));
+    }
+    if flags.tui {
+        return Err(err!("--restart cannot be combined with --tui"));
+    }
+    if flags.ci {
+        return Err(err!("--restart cannot be combined with --ci"));
+    }
+    if flags.version {
+        return Err(err!("--restart cannot be combined with --version"));
+    }
+    if flags.config.is_some() {
+        return Err(err!("--restart cannot be combined with --config"));
+    }
+    if !flags.task_name.is_empty() {
+        return Err(err!("--restart cannot be combined with task names"));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_version_request(flags: &Nao) -> NaoResult<()> {
     if flags.init {
         return Err(err!("--version cannot be combined with --init"));
+    }
+    if flags.restart {
+        return Err(err!("--version cannot be combined with --restart"));
     }
     if flags.list {
         return Err(err!("--version cannot be combined with --list"));
@@ -50,6 +83,9 @@ pub(crate) fn validate_version_request(flags: &Nao) -> NaoResult<()> {
 }
 
 pub(crate) fn validate_init_request(flags: &Nao) -> NaoResult<()> {
+    if flags.restart {
+        return Err(err!("--init cannot be combined with --restart"));
+    }
     if flags.list {
         return Err(err!("--init cannot be combined with --list"));
     }
@@ -74,6 +110,7 @@ mod tests {
     use super::should_run_tui;
     use super::validate_ci_request;
     use super::validate_init_request;
+    use super::validate_restart_request;
     use super::validate_tui_request;
     use super::validate_version_request;
     use crate::Nao;
@@ -119,6 +156,38 @@ mod tests {
     }
 
     #[test]
+    fn rejects_task_names_with_restart() {
+        let flags =
+            Nao::from_vec(vec![OsString::from("--restart"), OsString::from("build")]).unwrap();
+
+        let error = validate_restart_request(&flags).unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("--restart cannot be combined with task names")
+        );
+    }
+
+    #[test]
+    fn rejects_config_with_restart() {
+        let flags = Nao::from_vec(vec![
+            OsString::from("--restart"),
+            OsString::from("--config"),
+            OsString::from("custom.kdl"),
+        ])
+        .unwrap();
+
+        let error = validate_restart_request(&flags).unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("--restart cannot be combined with --config")
+        );
+    }
+
+    #[test]
     fn rejects_init_with_version() {
         let flags =
             Nao::from_vec(vec![OsString::from("--version"), OsString::from("--init")]).unwrap();
@@ -129,6 +198,23 @@ mod tests {
             error
                 .to_test_string()
                 .contains("--version cannot be combined with --init")
+        );
+    }
+
+    #[test]
+    fn rejects_restart_with_version() {
+        let flags = Nao::from_vec(vec![
+            OsString::from("--version"),
+            OsString::from("--restart"),
+        ])
+        .unwrap();
+
+        let error = validate_version_request(&flags).unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("--version cannot be combined with --restart")
         );
     }
 
@@ -175,6 +261,20 @@ mod tests {
             error
                 .to_test_string()
                 .contains("--init cannot be combined with --list")
+        );
+    }
+
+    #[test]
+    fn rejects_restart_with_init() {
+        let flags =
+            Nao::from_vec(vec![OsString::from("--init"), OsString::from("--restart")]).unwrap();
+
+        let error = validate_init_request(&flags).unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("--init cannot be combined with --restart")
         );
     }
 

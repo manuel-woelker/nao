@@ -26,6 +26,7 @@ pub struct PalMock {
 struct PalMockInner {
     effects_string: String,
     file_map: HashMap<FilePath, Vec<u8>>,
+    file_modified_times: HashMap<FilePath, SystemTime>,
     directories: HashSet<FilePath>,
     process_executions: HashMap<ProcessCommand, (Vec<ProcessEvent>, ProcessResult, Duration)>,
     interactive_terminal: bool,
@@ -40,6 +41,7 @@ impl PalMock {
             inner: Arc::new(RwLock::new(PalMockInner {
                 effects_string: String::new(),
                 file_map: HashMap::new(),
+                file_modified_times: HashMap::new(),
                 directories: HashSet::new(),
                 process_executions: HashMap::new(),
                 interactive_terminal: false,
@@ -71,10 +73,11 @@ impl PalMock {
     }
 
     pub fn set_file(&self, file_path: &str, content: impl Into<Vec<u8>>) {
-        self.inner
-            .write()
-            .file_map
-            .insert(FilePath::from(file_path), content.into());
+        let path = FilePath::from(file_path);
+        let mut inner = self.inner.write();
+        inner.file_map.insert(path.clone(), content.into());
+        let current_system_time = inner.current_system_time;
+        inner.file_modified_times.insert(path, current_system_time);
     }
 
     pub fn set_directory(&self, path: &str) {
@@ -144,6 +147,15 @@ impl Pal for PalMock {
         Ok(self.inner.read().file_map.contains_key(path))
     }
 
+    fn file_modified_time(&self, path: &FilePath) -> NaoResult<SystemTime> {
+        self.inner
+            .read()
+            .file_modified_times
+            .get(path)
+            .copied()
+            .with_context(|| format!("File '{path}' does not exist"))
+    }
+
     fn read_file(&self, path: &FilePath) -> NaoResult<Box<dyn ReadSeek + 'static>> {
         self.log_effect(format!("READ FILE: {path}"));
         Ok(Box::new(Cursor::new(
@@ -201,10 +213,12 @@ impl Pal for PalMock {
             path,
             String::from_utf8_lossy(content)
         ));
-        self.inner
-            .write()
-            .file_map
-            .insert(path.clone(), content.to_vec());
+        let mut inner = self.inner.write();
+        inner.file_map.insert(path.clone(), content.to_vec());
+        let current_system_time = inner.current_system_time;
+        inner
+            .file_modified_times
+            .insert(path.clone(), current_system_time);
         Ok(())
     }
 
@@ -214,12 +228,27 @@ impl Pal for PalMock {
             path,
             String::from_utf8_lossy(content)
         ));
-        self.inner
-            .write()
+        let mut inner = self.inner.write();
+        inner
             .file_map
             .entry(path.clone())
             .and_modify(|existing| existing.extend_from_slice(content))
             .or_insert_with(|| content.to_vec());
+        let current_system_time = inner.current_system_time;
+        inner
+            .file_modified_times
+            .insert(path.clone(), current_system_time);
+        Ok(())
+    }
+
+    fn touch_file(&self, path: &FilePath) -> NaoResult<()> {
+        self.log_effect(format!("TOUCH FILE: {path}"));
+        let mut inner = self.inner.write();
+        inner.file_map.entry(path.clone()).or_default();
+        let current_system_time = inner.current_system_time;
+        inner
+            .file_modified_times
+            .insert(path.clone(), current_system_time);
         Ok(())
     }
 

@@ -100,18 +100,27 @@ Mock PAL tests should cover:
 
 Add a small real-filesystem PAL test only if mtime behavior cannot be represented well with `PalMock`.
 
-# What is the implementation checklist?
+# What was implemented?
 
-- [ ] Add `--restart` to CLI parsing.
-- [ ] Add validation for incompatible `--restart` flag combinations.
-- [ ] Add restart marker path helpers for `.nao/internal/restart`.
-- [ ] Implement startup marker creation without unnecessarily touching an existing marker.
-- [ ] Implement `nao --restart` as a marker-file touch operation.
-- [ ] Add a marker poller that checks mtime every 1000ms during interactive runs.
-- [ ] Route marker changes and `Ctrl+R` through the same restart controller.
-- [ ] Update help text with the marker-file behavior and one-second polling.
-- [ ] Add colocated tests for parser, validation, marker touching, marker polling, and restart behavior.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Add `--restart` to CLI parsing.
+- [x] Add validation for incompatible `--restart` flag combinations.
+- [x] Add restart marker path helpers for `.nao/internal/restart`.
+- [x] Implement startup marker creation without unnecessarily touching an existing marker.
+- [x] Implement `nao --restart` as a marker-file touch operation.
+- [x] Add a marker poller that checks mtime every 1000ms during CLI runs.
+- [x] Route marker changes and `Ctrl+R` through the same restart controller.
+- [x] Update help text with the marker-file behavior and one-second polling.
+- [x] Add colocated tests for parser, validation, marker touching, marker polling, and restart behavior.
+- [x] Run `./scripts/check-code.sh`.
+
+# How was this verified?
+
+Verification completed with:
+
+```text
+cargo test -p nao restart -- --nocapture
+./scripts/check-code.sh
+```
 
 # What assumptions need validation?
 

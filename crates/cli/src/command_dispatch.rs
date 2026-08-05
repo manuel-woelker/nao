@@ -8,8 +8,10 @@ use crate::request_validation::is_default_action_request;
 use crate::request_validation::should_run_tui;
 use crate::request_validation::validate_ci_request;
 use crate::request_validation::validate_init_request;
+use crate::request_validation::validate_restart_request;
 use crate::request_validation::validate_tui_request;
 use crate::request_validation::validate_version_request;
+use crate::restart_marker::touch_restart_marker;
 use crate::runner::Runner;
 use crate::version_metadata::VersionMetadata;
 use crate::version_metadata::load_version_metadata;
@@ -68,6 +70,13 @@ where
     if flags.init {
         validate_init_request(&flags)?;
         initialize_recipe_file(&*pal, &primary_recipe_path())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if flags.restart {
+        validate_restart_request(&flags)?;
+        touch_restart_marker(&*pal)?;
+        println!("Requested restart by touching .nao/internal/restart");
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -232,6 +241,30 @@ mod tests {
         .unwrap();
 
         assert_eq!(exit_code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn run_with_restart_touches_restart_marker() {
+        let pal = PalMock::new();
+        pal.set_current_system_time(
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1),
+        );
+        let flags = Nao::from_vec(vec![OsString::from("--restart")]).unwrap();
+
+        let exit_code = run_with_pal_and_version_loader(flags, PalHandle::new(pal.clone()), || {
+            unreachable!("--restart should not load version metadata")
+        })
+        .unwrap();
+
+        assert_eq!(exit_code, ExitCode::SUCCESS);
+        assert_eq!(
+            pal.read_file_bytes(".nao/internal/restart"),
+            Some(Vec::new())
+        );
+        assert!(
+            pal.get_effects()
+                .contains("TOUCH FILE: .nao/internal/restart")
+        );
     }
 
     #[test]
