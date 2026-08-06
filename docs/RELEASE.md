@@ -97,8 +97,9 @@ The tag is created only after all publishes succeed.
 That is deliberate.
 Publishing first avoids creating a public GitHub release for a version whose crates only half-published.
 
-The publish step also fails early if any crate already exists on crates.io at the selected shared version.
-That is much better than discovering it halfway through dependency verification like an idiot.
+The publish step is resumable.
+Before publishing each crate, it checks the crates.io metadata endpoint and skips that crate when the selected version is already available.
+If a publish fails partway through, fix the cause and rerun `./scripts/release.sh publish`; previously published crates will not be published again.
 
 The dry-run mode does not attempt a fake full crates.io publish rehearsal for every crate.
 That is intentional.

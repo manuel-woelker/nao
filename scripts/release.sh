@@ -119,8 +119,25 @@ crate_version_exists_on_crates_io() {
   local package_name="$1"
   local version="$2"
   local url="https://crates.io/api/v1/crates/$package_name/$version"
+  local http_status
 
-  curl --fail --silent --show-error "$url" >/dev/null 2>&1
+  log "checking $url"
+  if ! http_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$url")"; then
+    return 2
+  fi
+
+  case "$http_status" in
+    2??|3??)
+      return 0
+      ;;
+    404)
+      return 1
+      ;;
+    *)
+      printf 'error: crates.io returned HTTP %s while checking %s %s\n' "$http_status" "$package_name" "$version" >&2
+      return 2
+      ;;
+  esac
 }
 
 assert_release_version_available() {
@@ -130,6 +147,9 @@ assert_release_version_available() {
   for package_name in "${CRATE_PACKAGES[@]}"; do
     if crate_version_exists_on_crates_io "$package_name" "$version"; then
       fail "$package_name $version already exists on crates.io; bump the shared version before publishing"
+    else
+      local check_status=$?
+      [[ "$check_status" -eq 1 ]] || fail "failed to check whether $package_name $version exists on crates.io"
     fi
   done
 }
@@ -235,10 +255,9 @@ wait_for_crate_version() {
   local package_name="$1"
   local version="$2"
   local attempt
-  local url="https://crates.io/api/v1/crates/$package_name/$version"
 
   for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt += 1)); do
-    if curl --fail --silent --show-error "$url" >/dev/null; then
+    if crate_version_exists_on_crates_io "$package_name" "$version"; then
       return
     fi
 
@@ -257,6 +276,15 @@ publish_crates() {
   for index in "${!CRATE_DIRS[@]}"; do
     crate_dir="${CRATE_DIRS[$index]}"
     package_name="${CRATE_PACKAGES[$index]}"
+
+    if crate_version_exists_on_crates_io "$package_name" "$version"; then
+      log "skipping $package_name $version; already published on crates.io"
+      continue
+    else
+      local check_status=$?
+      [[ "$check_status" -eq 1 ]] || fail "failed to check whether $package_name $version exists on crates.io"
+    fi
+
     log "publishing $package_name $version"
     cargo publish \
       --manifest-path "$ROOT_DIR/$crate_dir/Cargo.toml" \
@@ -291,7 +319,6 @@ run_pre_release_checks() {
   assert_clean_worktree
   assert_shared_version "$version"
   assert_internal_dependency_versions "$version"
-  assert_release_version_available "$version"
   run_repo_checks
   assert_clean_worktree
 
