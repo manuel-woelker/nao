@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RELEASE_BRANCH="${NAO_RELEASE_BRANCH:-main}"
 WAIT_ATTEMPTS="${NAO_RELEASE_WAIT_ATTEMPTS:-30}"
 WAIT_SECONDS="${NAO_RELEASE_WAIT_SECONDS:-10}"
+CRATES_IO_USER_AGENT="${NAO_RELEASE_USER_AGENT:-nao-release-script/1.0 (https://github.com/manuel-woelker/nao)}"
 DRY_RUN=0
 MODE="publish"
 TARGET_VERSION=""
@@ -122,7 +123,14 @@ crate_version_exists_on_crates_io() {
   local http_status
 
   log "checking $url"
-  if ! http_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$url")"; then
+  if ! http_status="$(curl \
+    --silent \
+    --show-error \
+    --output /dev/null \
+    --write-out '%{http_code}' \
+    --header 'Accept: application/json' \
+    --user-agent "$CRATES_IO_USER_AGENT" \
+    "$url")"; then
     return 2
   fi
 
