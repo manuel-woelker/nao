@@ -1,6 +1,6 @@
 [package]
 name = "nao-engine"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 description = "Run planning engine for the nao task runner"
 license = "MIT"
@@ -10,9 +10,9 @@ repository = "https://github.com/manuel-woelker/nao"
 path = "src/lib.rs"
 
 [dependencies]
-nao-base = { path = "../base", version = "0.1.6" }
-nao-pal = { path = "../pal", version = "0.1.6" }
-nao-recipe = { path = "../recipe", version = "0.1.6" }
+nao-base = { path = "../base", version = "0.1.7" }
+nao-pal = { path = "../pal", version = "0.1.7" }
+nao-recipe = { path = "../recipe", version = "0.1.7" }
 serde_json = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
 
